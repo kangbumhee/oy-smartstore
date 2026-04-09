@@ -13,7 +13,7 @@ module.exports = async function handler(req, res) {
   if (!imageUrls.length) return res.status(400).json({ error: 'imageUrls required' });
 
   try {
-    let token = resolveToken(req);
+    let token = resolveToken(req, body);
     if (!token) {
       const { clientId, clientSecret } = resolveCredentials(req);
       const result = await getAccessToken(clientId, clientSecret);

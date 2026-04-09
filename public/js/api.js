@@ -30,24 +30,35 @@ const API = {
     return r.json();
   },
 
+  _withNaverTokenBody(body, useNaverToken) {
+    if (!useNaverToken || !this._naverToken || body == null || typeof body !== 'object' || Array.isArray(body)) {
+      return body;
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'token')) return body;
+    return { ...body, token: this._naverToken };
+  },
+
   async post(url, body, useNaverToken) {
     const h = useNaverToken ? this._naverHeaders() : this._credHeaders();
     h['Content-Type'] = 'application/json';
-    const r = await fetch(url, { method: 'POST', headers: h, body: JSON.stringify(body) });
+    const payload = this._withNaverTokenBody(body, useNaverToken);
+    const r = await fetch(url, { method: 'POST', headers: h, body: JSON.stringify(payload) });
     return r.json();
   },
 
   async put(url, body, useNaverToken) {
     const h = useNaverToken ? this._naverHeaders() : this._credHeaders();
     h['Content-Type'] = 'application/json';
-    const r = await fetch(url, { method: 'PUT', headers: h, body: JSON.stringify(body) });
+    const payload = this._withNaverTokenBody(body, useNaverToken);
+    const r = await fetch(url, { method: 'PUT', headers: h, body: JSON.stringify(payload) });
     return r.json();
   },
 
   async patch(url, body, useNaverToken) {
     const h = useNaverToken ? this._naverHeaders() : this._credHeaders();
     h['Content-Type'] = 'application/json';
-    const r = await fetch(url, { method: 'PATCH', headers: h, body: JSON.stringify(body) });
+    const payload = this._withNaverTokenBody(body, useNaverToken);
+    const r = await fetch(url, { method: 'PATCH', headers: h, body: JSON.stringify(payload) });
     return r.json();
   },
 

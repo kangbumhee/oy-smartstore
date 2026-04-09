@@ -83,7 +83,7 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    let token = resolveToken(req);
+    let token = resolveToken(req, body);
     if (!token) {
       const { clientId, clientSecret } = resolveCredentials(req);
       const result = await getAccessToken(clientId, clientSecret);

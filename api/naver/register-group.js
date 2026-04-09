@@ -43,10 +43,13 @@ function extractGuidesArray(data) {
 }
 
 async function fetchGuideId(headers, categoryId) {
+  const enc = encodeURIComponent(categoryId);
   const endpoints = [
-    `${NAVER_API_BASE}/v2/product-option-guides?leafCategoryId=${encodeURIComponent(categoryId)}`,
-    `${NAVER_API_BASE}/v2/standard-purchase-option-guides?leafCategoryId=${encodeURIComponent(categoryId)}`,
-    `${NAVER_API_BASE}/v2/products/standard-purchase-options?leafCategoryId=${encodeURIComponent(categoryId)}`,
+    `${NAVER_API_BASE}/v2/product-option-guides?leafCategoryId=${enc}`,
+    `${NAVER_API_BASE}/v2/standard-purchase-option-guides?leafCategoryId=${enc}`,
+    `${NAVER_API_BASE}/v2/categories/${enc}/product-option-guides`,
+    `${NAVER_API_BASE}/v2/categories/${enc}/standard-purchase-option-guides`,
+    `${NAVER_API_BASE}/v2/products/standard-purchase-options?leafCategoryId=${enc}`,
   ];
 
   for (const url of endpoints) {
@@ -63,7 +66,11 @@ async function fetchGuideId(headers, categoryId) {
 
       if (Array.isArray(guides) && guides.length > 0) {
         const first = guides[0];
-        const id = first.guideId ?? first.id;
+        const id =
+          first.guideId ??
+          first.id ??
+          first.standardPurchaseOptionGuideNo ??
+          first.standardPurchaseOptionGuideId;
         if (id != null && id !== '') {
           console.log('[group] Found guideId:', id, 'from:', url);
           return { guideId: id, guides: first };
@@ -120,7 +127,7 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    let token = resolveToken(req);
+    let token = resolveToken(req, body);
     if (!token) {
       const { clientId, clientSecret } = resolveCredentials(req);
       const result = await getAccessToken(clientId, clientSecret);
