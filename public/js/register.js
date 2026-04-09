@@ -131,18 +131,15 @@ const Register = {
     const cleanedBaseName = this.cleanProductName(product.name);
 
     let opts = (product.options || []).filter((o) => !o.soldOut);
-    if (opts.length === 0) {
-      const hint = /(\d+)\s*(COLOR|컬러|색상|종|타입|TYPE|SET|세트|개입|colors)/i.test(product.name || '');
-      if (hint && typeof OptionModal !== 'undefined') {
-        try {
-          const mo = await OptionModal.open(product);
-          if (mo?.length > 0) {
-            product.options = mo;
-            Storage.updateQueueItem(goodsNo, { options: mo });
-            opts = mo.filter((o) => !o.soldOut);
-          }
-        } catch { /* cancelled */ }
-      }
+    if (opts.length === 0 && typeof OptionModal !== 'undefined') {
+      try {
+        const mo = await OptionModal.open(product);
+        if (mo?.length > 0) {
+          product.options = mo;
+          Storage.updateQueueItem(goodsNo, { options: mo });
+          opts = mo.filter((o) => !o.soldOut);
+        }
+      } catch { /* cancelled */ }
     }
     if (opts.length > 0) opts = await this.showStockPopup(opts, product);
 

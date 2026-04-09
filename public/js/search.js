@@ -188,11 +188,8 @@ const Search = {
       return product;
     }
 
-    // 2차: OptionModal 팝업 (올리브영 도메인에서 직접 API 호출)
-    const nameHints = product.name || '';
-    const hasOptionHint = /(\d+)\s*(COLOR|컬러|색상|종|타입|TYPE|SET|세트|개입|colors)/i.test(nameHints);
-
-    if (hasOptionHint) {
+    // 2차: OptionModal 팝업 (서버 API 실패 시 항상 시도)
+    if (typeof OptionModal !== 'undefined') {
       try {
         const modalOptions = await OptionModal.open(product);
         if (modalOptions && modalOptions.length > 0) {
