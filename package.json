@@ -1,0 +1,14 @@
+{
+  "name": "oy-smartstore",
+  "version": "1.0.0",
+  "private": true,
+  "description": "올리브영 → 네이버 스마트스토어 자동 상품 등록",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "bcryptjs": "^2.4.3",
+    "undici": "^7.24.7"
+  }
+}

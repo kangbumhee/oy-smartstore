@@ -1,0 +1,78 @@
+/* LocalStorage Manager */
+const Storage = {
+  KEYS: {
+    QUEUE: 'oy_register_queue',
+    REGISTERED: 'oy_registered_products',
+    SETTINGS: 'oy_settings',
+    CREDENTIALS: 'oy_credentials',
+  },
+
+  get(key, fallback = null) {
+    try {
+      const val = localStorage.getItem(key);
+      return val ? JSON.parse(val) : fallback;
+    } catch { return fallback; }
+  },
+
+  set(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* quota */ }
+  },
+
+  getQueue() { return this.get(this.KEYS.QUEUE, []); },
+
+  addToQueue(product) {
+    const queue = this.getQueue();
+    if (queue.some((p) => p.goodsNo === product.goodsNo)) return false;
+    queue.push({ ...product, addedAt: Date.now() });
+    this.set(this.KEYS.QUEUE, queue);
+    return true;
+  },
+
+  removeFromQueue(goodsNo) {
+    const queue = this.getQueue().filter((p) => p.goodsNo !== goodsNo);
+    this.set(this.KEYS.QUEUE, queue);
+  },
+
+  updateQueueItem(goodsNo, updates) {
+    const queue = this.getQueue();
+    const idx = queue.findIndex((p) => p.goodsNo === goodsNo);
+    if (idx >= 0) {
+      queue[idx] = { ...queue[idx], ...updates };
+      this.set(this.KEYS.QUEUE, queue);
+    }
+  },
+
+  getRegistered() { return this.get(this.KEYS.REGISTERED, []); },
+
+  addRegistered(product) {
+    const list = this.getRegistered();
+    list.unshift({ ...product, registeredAt: Date.now() });
+    this.set(this.KEYS.REGISTERED, list);
+  },
+
+  getSettings() {
+    return this.get(this.KEYS.SETTINGS, {
+      marginRate: 15,
+      autoCategory: true,
+      autoDescription: true,
+    });
+  },
+
+  setSettings(settings) {
+    this.set(this.KEYS.SETTINGS, settings);
+  },
+
+  getCredentials() {
+    return this.get(this.KEYS.CREDENTIALS, {
+      naverClientId: '',
+      naverClientSecret: '',
+      googleApiKey: '',
+      aiBaseUrl: '',
+      eccoApiKey: '',
+    });
+  },
+
+  setCredentials(creds) {
+    this.set(this.KEYS.CREDENTIALS, creds);
+  },
+};

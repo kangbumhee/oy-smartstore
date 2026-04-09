@@ -1,0 +1,8 @@
+{
+  "functions": {
+    "api/image/studio.js": { "maxDuration": 120 },
+    "api/naver/upload-image.js": { "maxDuration": 120 },
+    "api/naver/register.js": { "maxDuration": 60 },
+    "api/ai/description.js": { "maxDuration": 60 }
+  }
+}

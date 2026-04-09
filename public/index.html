@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OY → SmartStore Auto</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">
+        <span class="logo-icon">🛒</span>
+        <span class="logo-text">OY → SS</span>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item active" data-page="search">
+        <span class="nav-icon">🔍</span><span>상품 검색</span>
+      </a>
+      <a href="#" class="nav-item" data-page="register">
+        <span class="nav-icon">📤</span><span>등록 대기</span>
+        <span class="badge" id="queue-badge" style="display:none">0</span>
+      </a>
+      <a href="#" class="nav-item" data-page="products">
+        <span class="nav-icon">📦</span><span>등록 상품</span>
+      </a>
+      <a href="#" class="nav-item" data-page="blog">
+        <span class="nav-icon">📝</span><span>블로그 홍보</span>
+      </a>
+      <a href="#" class="nav-item" data-page="margin">
+        <span class="nav-icon">💰</span><span>마진 계산기</span>
+      </a>
+      <a href="#" class="nav-item" data-page="settings">
+        <span class="nav-icon">⚙️</span><span>설정</span>
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="status-indicator" id="api-status">
+        <span class="status-dot offline"></span>
+        <span class="status-text">연결 확인 중...</span>
+      </div>
+    </div>
+  </aside>
+
+  <header class="mobile-header">
+    <button class="menu-toggle" id="menu-toggle">☰</button>
+    <span class="mobile-title">OY → SS Auto</span>
+  </header>
+
+  <main class="main-content" id="main-content">
+    <!-- Search Page -->
+    <div class="page active" id="page-search">
+      <div class="page-header">
+        <h1>올리브영 상품 검색</h1>
+        <p class="page-desc">상품명 또는 올리브영 상품번호/URL로 검색하세요</p>
+      </div>
+      <div class="search-box">
+        <div class="search-input-wrap">
+          <input type="text" id="search-input" placeholder="상품명, URL, 또는 상품번호 입력..." autocomplete="off" />
+          <button class="btn btn-primary" id="search-btn">검색</button>
+        </div>
+        <div class="search-hint">예: 라네즈 워터 슬리핑 마스크 / A000000175237 / oliveyoung.co.kr/..../175237</div>
+      </div>
+      <div id="search-loading" class="loading-box" style="display:none">
+        <div class="spinner"></div>
+        <p>올리브영에서 상품을 검색하고 있습니다...</p>
+      </div>
+      <div id="search-results" class="product-grid"></div>
+      <div id="search-empty" class="empty-state" style="display:none">
+        <span class="empty-icon">🔍</span><p>검색 결과가 없습니다</p>
+      </div>
+    </div>
+
+    <!-- Register Queue Page -->
+    <div class="page" id="page-register">
+      <div class="page-header">
+        <h1>등록 대기 상품</h1>
+        <p class="page-desc">선택한 상품의 마진을 설정하고 스마트스토어에 등록하세요</p>
+      </div>
+      <div id="register-queue"></div>
+      <div id="register-empty" class="empty-state">
+        <span class="empty-icon">📋</span>
+        <p>등록 대기 중인 상품이 없습니다</p>
+        <p class="empty-sub">검색 페이지에서 상품을 선택하세요</p>
+      </div>
+    </div>
+
+    <!-- Products Page -->
+    <div class="page" id="page-products">
+      <div class="page-header">
+        <h1>등록된 상품</h1>
+        <p class="page-desc">스마트스토어에 등록 완료된 상품 목록</p>
+      </div>
+      <div id="products-list"></div>
+      <div id="products-empty" class="empty-state">
+        <span class="empty-icon">📦</span><p>아직 등록된 상품이 없습니다</p>
+      </div>
+    </div>
+
+    <!-- Blog Page -->
+    <div class="page" id="page-blog">
+      <div class="page-header">
+        <h1>블로그 홍보 글 생성</h1>
+        <p class="page-desc">등록된 상품의 네이버 블로그 홍보 글을 AI로 자동 생성합니다</p>
+      </div>
+      <div class="blog-selector-card">
+        <h3>상품 선택</h3>
+        <select id="blog-product-select" class="blog-select">
+          <option value="">-- 등록된 상품을 선택하세요 --</option>
+        </select>
+        <div class="blog-options-row">
+          <div class="blog-option">
+            <label for="blog-tone">글 톤</label>
+            <select id="blog-tone">
+              <option value="friendly">친근한 일상 리뷰</option>
+              <option value="professional">전문적인 분석</option>
+              <option value="trendy">트렌디한 뷰티 블로거</option>
+              <option value="minimal">미니멀 심플 리뷰</option>
+            </select>
+          </div>
+          <div class="blog-option">
+            <label for="blog-length">글 길이</label>
+            <select id="blog-length">
+              <option value="short">짧게 (500자)</option>
+              <option value="medium" selected>보통 (1000자)</option>
+              <option value="long">길게 (2000자)</option>
+            </select>
+          </div>
+        </div>
+        <div class="blog-option" style="margin-top:12px">
+          <label for="blog-keywords">추가 키워드 (쉼표 구분)</label>
+          <input type="text" id="blog-keywords" placeholder="예: 건성피부, 수분크림, 겨울철추천" />
+        </div>
+        <div class="blog-actions-top">
+          <button class="btn btn-primary" id="blog-generate-btn" onclick="Blog.generate()">블로그 글 생성</button>
+        </div>
+      </div>
+      <div id="blog-loading" class="loading-box" style="display:none">
+        <div class="spinner"></div><p>AI가 블로그 글을 작성하고 있습니다...</p>
+      </div>
+      <div id="blog-result" class="blog-result-card" style="display:none">
+        <div class="blog-result-header">
+          <h3 id="blog-result-title">블로그 글 미리보기</h3>
+          <div class="blog-result-actions">
+            <button class="btn btn-sm btn-outline" onclick="Blog.copyText()">텍스트 복사</button>
+            <button class="btn btn-sm btn-outline" onclick="Blog.copyHtml()">HTML 복사</button>
+            <button class="btn btn-sm btn-primary" onclick="Blog.openNaverBlog()">네이버 블로그 열기</button>
+          </div>
+        </div>
+        <div class="blog-tags" id="blog-tags"></div>
+        <div class="blog-preview" id="blog-preview"></div>
+      </div>
+      <div id="blog-empty" class="empty-state">
+        <span class="empty-icon">📝</span>
+        <p>등록된 상품을 선택하고 블로그 홍보 글을 생성하세요</p>
+        <p class="empty-sub">AI가 상품에 맞는 네이버 블로그 글을 작성해 드립니다</p>
+      </div>
+    </div>
+
+    <!-- Margin Calculator Page -->
+    <div class="page" id="page-margin">
+      <div class="page-header">
+        <h1>마진 계산기</h1>
+        <p class="page-desc">올리브영 가격을 입력하고 최적의 판매가를 계산하세요</p>
+      </div>
+      <div class="calc-card">
+        <div class="calc-row">
+          <label>올리브영 가격</label>
+          <input type="number" id="calc-oy-price" placeholder="0" />
+        </div>
+        <div class="calc-row">
+          <label>마진율 (%)</label>
+          <div class="range-wrap">
+            <input type="range" id="calc-margin-range" min="5" max="50" value="15" />
+            <input type="number" id="calc-margin-input" value="15" min="5" max="50" />
+            <span>%</span>
+          </div>
+        </div>
+        <div class="calc-divider"></div>
+        <div class="calc-results">
+          <div class="calc-result-item"><span class="label">판매가</span><span class="value" id="calc-selling-price">0원</span></div>
+          <div class="calc-result-item"><span class="label">스마트스토어 배송비</span><span class="value dim">3,000원 (구매자 부담)</span></div>
+          <div class="calc-result-item"><span class="label">올리브영 배송비</span><span class="value dim">2,500원 (2만원 미만)</span></div>
+          <div class="calc-result-item highlight"><span class="label">예상 순이익</span><span class="value" id="calc-profit">0원</span></div>
+          <div class="calc-result-item"><span class="label">배송비 차익</span><span class="value" id="calc-shipping-profit">+500원</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings Page -->
+    <div class="page" id="page-settings">
+      <div class="page-header">
+        <h1>설정</h1>
+        <p class="page-desc">API 키를 입력하고, 마진/배송비 등 기본 설정을 관리하세요</p>
+      </div>
+
+      <!-- 1. Naver API -->
+      <details class="accordion" open>
+        <summary class="accordion-title">네이버 커머스 API</summary>
+        <div class="accordion-body">
+          <details class="guide-toggle">
+            <summary class="guide-summary">API 키 발급 방법 보기</summary>
+            <div class="guide-content">
+              <ol>
+                <li><a href="https://commerce.naver.com" target="_blank">네이버 커머스센터</a>에 로그인합니다.</li>
+                <li>좌측 메뉴 → <strong>스토어 관리 → 애플리케이션 관리</strong>로 이동합니다.</li>
+                <li><strong>애플리케이션 등록</strong> 버튼을 클릭합니다.</li>
+                <li>애플리케이션 이름을 입력하고, <strong>API 접근허용 IP</strong>를 설정합니다.<br>
+                  <span class="guide-warn">⚠️ IP 제한을 비울 수 없으므로, 고정 IP 프록시를 사용합니다. 아래 프록시 상태를 확인하세요.</span>
+                </li>
+                <li>등록 완료 후 <strong>애플리케이션 ID</strong>와 <strong>애플리케이션 시크릿</strong>을 복사합니다.</li>
+              </ol>
+            </div>
+          </details>
+          <div class="cred-row">
+            <label for="cred-naver-id">Client ID</label>
+            <div class="cred-input-wrap">
+              <input type="text" id="cred-naver-id" placeholder="애플리케이션 ID" autocomplete="off" />
+            </div>
+          </div>
+          <div class="cred-row">
+            <label for="cred-naver-secret">Client Secret</label>
+            <div class="cred-input-wrap">
+              <input type="password" id="cred-naver-secret" placeholder="애플리케이션 시크릿" autocomplete="off" />
+              <button class="btn-icon" onclick="App.togglePassword('cred-naver-secret')" title="보기/숨기기">👁</button>
+            </div>
+          </div>
+          <div class="cred-test-row">
+            <button class="btn btn-sm btn-outline" onclick="App.testNaverConnection()">연결 테스트</button>
+            <span class="cred-test-result" id="naver-test-result"></span>
+          </div>
+          <div class="setting-row">
+            <span>연결 상태</span>
+            <span class="status-badge" id="naver-status">확인 중...</span>
+          </div>
+          <div class="setting-row">
+            <span>고정 IP 프록시</span>
+            <span class="status-badge" id="proxy-status">확인 중...</span>
+          </div>
+          <div class="setting-row">
+            <span>서버 IP (프록시 경유)</span>
+            <span class="status-badge mono" id="server-ip-display">-</span>
+          </div>
+        </div>
+      </details>
+
+      <!-- 2. AI API -->
+      <details class="accordion" open>
+        <summary class="accordion-title">AI 모델 설정 (Gemini / OpenAI 호환)</summary>
+        <div class="accordion-body">
+          <details class="guide-toggle">
+            <summary class="guide-summary">AI API 키 발급 방법 보기</summary>
+            <div class="guide-content">
+              <h4>방법 1: Google Gemini (무료)</h4>
+              <ol>
+                <li><a href="https://aistudio.google.com/apikey" target="_blank">Google AI Studio</a>에 접속합니다.</li>
+                <li>Google 계정으로 로그인 후 <strong>Get API Key</strong> 클릭합니다.</li>
+                <li>생성된 API Key (<code>AIzaSy...</code>)를 복사합니다.</li>
+                <li>아래 <strong>AI API Key</strong>에 붙여넣고, <strong>Base URL은 비워둡니다.</strong></li>
+              </ol>
+              <h4>방법 2: OpenAI 호환 API (claudeagent 등)</h4>
+              <ol>
+                <li><a href="https://claudeagent.com.cn/register" target="_blank">claudeagent.com.cn</a>에 회원가입합니다.</li>
+                <li>콘솔 → 令牌管理(토큰 관리) → 새 토큰 생성합니다.</li>
+                <li>생성된 키 (<code>sk-xxx</code>)를 <strong>AI API Key</strong>에 입력합니다.</li>
+                <li><strong>Base URL</strong>에 <code>https://claudeagent.com.cn/v1</code>을 입력합니다.</li>
+                <li><strong>모델</strong>에서 <code>gemini-3.1-pro-preview</code>를 선택합니다.</li>
+              </ol>
+            </div>
+          </details>
+          <div class="cred-row">
+            <label for="cred-google-key">AI API Key</label>
+            <div class="cred-input-wrap">
+              <input type="password" id="cred-google-key" placeholder="AIzaSy... 또는 sk-..." autocomplete="off" />
+              <button class="btn-icon" onclick="App.togglePassword('cred-google-key')" title="보기/숨기기">👁</button>
+            </div>
+          </div>
+          <div class="cred-row">
+            <label for="cred-ai-baseurl">Base URL</label>
+            <div class="cred-input-wrap">
+              <input type="text" id="cred-ai-baseurl" placeholder="비워두면 Google 직접 연결 (OpenAI 호환: https://claudeagent.com.cn/v1)" autocomplete="off" />
+            </div>
+          </div>
+          <div class="cred-row">
+            <label for="setting-model">AI 모델</label>
+            <div class="cred-input-wrap">
+              <select id="setting-model">
+                <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview (추천)</option>
+                <option value="gemini-2.0-flash">gemini-2.0-flash (빠름)</option>
+                <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite (초고속)</option>
+                <option value="gemini-2.5-flash-preview-04-17">gemini-2.5-flash (최신)</option>
+                <option value="gemini-2.5-pro-preview-03-25">gemini-2.5-pro (고품질)</option>
+                <option value="claude-sonnet-4-6">claude-sonnet-4.6</option>
+                <option value="claude-opus-4-6">claude-opus-4.6</option>
+                <option value="gpt-5.4">gpt-5.4</option>
+                <option value="gpt-5.4-mini">gpt-5.4-mini</option>
+              </select>
+            </div>
+          </div>
+          <div class="cred-test-row">
+            <button class="btn btn-sm btn-outline" onclick="App.testGoogleConnection()">연결 테스트</button>
+            <span class="cred-test-result" id="google-test-result"></span>
+          </div>
+          <div class="setting-row">
+            <span>연결 상태</span>
+            <span class="status-badge" id="google-status">확인 중...</span>
+          </div>
+        </div>
+      </details>
+
+      <!-- 3. AI Image Generation (EccoAPI 나노바나나 3.1) -->
+      <details class="accordion" open>
+        <summary class="accordion-title">AI 상품 이미지 생성 (나노바나나 3.1)</summary>
+        <div class="accordion-body">
+          <details class="guide-toggle">
+            <summary class="guide-summary">EccoAPI 키 발급 및 나노바나나 안내</summary>
+            <div class="guide-content">
+              <p><strong>나노바나나</strong>는 Gemini AI 기반 이미지 생성 모델입니다. EccoAPI를 통해 사용합니다.</p>
+              <ol>
+                <li><a href="https://eccoapi.com" target="_blank">eccoapi.com</a>에 가입합니다.</li>
+                <li>Console → <strong>API Keys</strong>에서 키를 생성합니다 (<code>nk_live_...</code>).</li>
+                <li>아래에 키를 입력합니다.</li>
+              </ol>
+              <p><strong>비용:</strong> Nano Banana 3.1 (1K) = <strong>$0.03/장</strong> (약 40원)</p>
+              <ul>
+                <li>상품 등록 시 <strong>AI가 자동으로 상품 이미지를 생성</strong>합니다.</li>
+                <li>올리브영 이미지를 사용하지 않아 <strong>저작권 문제가 없습니다</strong>.</li>
+                <li>옵션이 있는 상품은 옵션별 이미지도 자동 생성됩니다.</li>
+              </ul>
+            </div>
+          </details>
+          <div class="cred-row">
+            <label for="cred-eccoapi-key">EccoAPI Key</label>
+            <div class="cred-input-wrap">
+              <input type="password" id="cred-eccoapi-key" placeholder="nk_live_..." autocomplete="off" />
+              <button class="btn-icon" onclick="App.togglePassword('cred-eccoapi-key')" title="보기/숨기기">👁</button>
+            </div>
+          </div>
+          <div class="cred-row">
+            <label for="setting-img-prompt">이미지 프롬프트</label>
+            <div class="cred-input-wrap">
+              <select id="setting-img-prompt-template" onchange="App.applyPromptTemplate()">
+                <optgroup label="여성 모델 (추천)">
+                  <option value="model_female_elegant">여성 모델 - 엘레강트 (기본)</option>
+                  <option value="model_female_fresh">여성 모델 - 프레시 청순</option>
+                  <option value="model_female_luxe">여성 모델 - 럭셔리 글래머</option>
+                </optgroup>
+                <optgroup label="남성 모델">
+                  <option value="model_male_clean">남성 모델 - 클린 깔끔</option>
+                  <option value="model_male_active">남성 모델 - 액티브 활동적</option>
+                  <option value="model_male_premium">남성 모델 - 프리미엄 시크</option>
+                </optgroup>
+                <optgroup label="모델 없음">
+                  <option value="studio_white">클린 스튜디오 (흰 배경, 모델X)</option>
+                </optgroup>
+                <optgroup label="기타">
+                  <option value="custom">직접 입력</option>
+                </optgroup>
+              </select>
+            </div>
+          </div>
+          <div class="cred-row">
+            <label for="setting-img-prompt-text">프롬프트 내용</label>
+            <div class="cred-input-wrap wide">
+              <textarea id="setting-img-prompt-text" rows="4" placeholder="상품 이미지 생성 프롬프트를 입력하세요. {product}=상품명, {brand}=브랜드, {option}=옵션명으로 자동 치환됩니다." style="width:100%;resize:vertical;padding:8px;border:1px solid var(--border);border-radius:8px;font-size:13px;"></textarea>
+            </div>
+          </div>
+          <div class="cred-row">
+            <label for="setting-img-count">생성 이미지 수</label>
+            <div class="cred-input-wrap" style="display:flex;align-items:center;gap:8px;">
+              <input type="number" id="setting-img-count" min="1" max="5" value="1" style="width:60px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:14px;" />
+              <span style="font-size:12px;color:var(--text-muted)">장 (1~5, 기본 1장 / $0.03/장)</span>
+            </div>
+          </div>
+          <div class="setting-row">
+            <span>상태</span>
+            <span class="status-badge" id="nanobanana-status">미설정</span>
+          </div>
+          <div class="cred-test-row">
+            <button class="btn btn-sm btn-outline" onclick="App.testImageGeneration()">이미지 생성 테스트</button>
+            <span class="cred-test-result" id="nanobanana-test-result"></span>
+          </div>
+        </div>
+      </details>
+
+      <!-- Save credentials -->
+      <div class="cred-save-bar">
+        <button class="btn btn-primary" onclick="App.saveCredentials()">API 키 저장</button>
+        <button class="btn btn-danger btn-sm" onclick="App.clearCredentials()">키 초기화</button>
+        <span class="cred-note-inline">키는 이 브라우저에만 저장됩니다</span>
+      </div>
+
+      <!-- 3. Margin / Shipping -->
+      <details class="accordion">
+        <summary class="accordion-title">마진 / 배송비 설정</summary>
+        <div class="accordion-body">
+          <div class="setting-row editable">
+            <label for="setting-margin">기본 마진율 (%)</label>
+            <div class="setting-input-wrap">
+              <input type="number" id="setting-margin" value="15" min="1" max="80" step="1" />
+              <span class="setting-unit">%</span>
+            </div>
+          </div>
+          <div class="setting-row editable">
+            <label for="setting-ss-ship">스마트스토어 배송비</label>
+            <div class="setting-input-wrap">
+              <input type="number" id="setting-ss-ship" value="3000" min="0" step="500" />
+              <span class="setting-unit">원</span>
+            </div>
+          </div>
+          <div class="setting-row editable">
+            <label for="setting-oy-ship">올리브영 배송비</label>
+            <div class="setting-input-wrap">
+              <input type="number" id="setting-oy-ship" value="2500" min="0" step="500" />
+              <span class="setting-unit">원</span>
+            </div>
+          </div>
+          <div class="setting-row editable">
+            <label for="setting-buffer">배송비 보전금</label>
+            <div class="setting-input-wrap">
+              <input type="number" id="setting-buffer" value="500" min="0" step="100" />
+              <span class="setting-unit">원</span>
+            </div>
+          </div>
+          <div class="setting-actions">
+            <button class="btn btn-primary" id="save-settings-btn">설정 저장</button>
+            <button class="btn btn-outline" id="reset-settings-btn">서버 기본값으로 초기화</button>
+          </div>
+          <div class="setting-saved-msg" id="setting-saved-msg" style="display:none">설정이 저장되었습니다.</div>
+        </div>
+      </details>
+
+      <!-- 4. Product Name -->
+      <details class="accordion">
+        <summary class="accordion-title">상품명 접두어 / 접미어</summary>
+        <div class="accordion-body">
+          <div class="setting-row editable">
+            <label for="setting-name-prefix">상품명 앞에 추가</label>
+            <div class="setting-input-wrap wide">
+              <input type="text" id="setting-name-prefix" placeholder="예: [당일발송]" />
+            </div>
+          </div>
+          <div class="setting-row editable">
+            <label for="setting-name-suffix">상품명 뒤에 추가</label>
+            <div class="setting-input-wrap wide">
+              <input type="text" id="setting-name-suffix" placeholder="예: /무료배송" />
+            </div>
+          </div>
+          <div class="setting-row editable">
+            <label for="setting-default-stock">기본 재고 수량</label>
+            <div class="setting-input-wrap">
+              <input type="number" id="setting-default-stock" value="999" min="1" max="9999" />
+              <span class="setting-unit">개</span>
+            </div>
+          </div>
+        </div>
+      </details>
+    </div>
+  </main>
+
+  <div class="modal-overlay" id="modal-overlay" style="display:none">
+    <div class="modal" id="product-modal">
+      <button class="modal-close" id="modal-close">&times;</button>
+      <div id="modal-content"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="progress-overlay" style="display:none">
+    <div class="modal modal-sm">
+      <div id="progress-content">
+        <h3>상품 등록 중...</h3>
+        <div class="progress-steps" id="progress-steps"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- OptionModal is dynamically created by option-modal.js -->
+
+  <div id="toast-container"></div>
+
+  <script src="/js/storage.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/margin.js"></script>
+  <script src="/js/ui.js"></script>
+  <script src="/js/option-modal.js"></script>
+  <script src="/js/search.js"></script>
+  <script src="/js/register.js"></script>
+  <script src="/js/products.js"></script>
+  <script src="/js/blog.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>

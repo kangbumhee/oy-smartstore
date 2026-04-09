@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "OY 옵션 가져오기",
+  "version": "1.0.0",
+  "description": "올리브영 상품 옵션을 자동으로 가져와 스마트스토어 업로드 앱으로 전달합니다.",
+  "permissions": ["activeTab"],
+  "content_scripts": [
+    {
+      "matches": ["https://www.oliveyoung.co.kr/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "externally_connectable": {
+    "matches": ["https://oy-smartstore.vercel.app/*", "http://localhost/*", "http://127.0.0.1/*"]
+  },
+  "icons": {
+    "48": "icon.png",
+    "128": "icon.png"
+  }
+}
