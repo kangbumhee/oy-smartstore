@@ -68,9 +68,12 @@ module.exports = async function handler(req, res) {
     return res.status(400).json({ error: 'name, sellingPrice, categoryId, detailHtml required' });
   }
 
-  const availableOpts = (options || []).filter((o) => !o.soldOut);
-  if (availableOpts.length < 2) {
-    return res.status(400).json({ error: '그룹상품은 2개 이상의 옵션이 필요합니다. 일반등록을 사용하세요.' });
+  const allOpts = options || [];
+  if (allOpts.length < 2) {
+    return res.status(400).json({
+      error: '그룹상품은 2개 이상의 옵션이 필요합니다.',
+      fallbackToNormal: true,
+    });
   }
 
   try {
@@ -102,19 +105,20 @@ module.exports = async function handler(req, res) {
 
     const productNotice = getProductNotice(oliveyoungCategory, cleanedName, brand);
 
-    const optPrices = availableOpts.map((o) => parseInt(o.sellingPrice || o.price || 0, 10)).filter((p) => p > 0);
+    const optPrices = allOpts.map((o) => parseInt(o.sellingPrice || o.price || 0, 10)).filter((p) => p > 0);
     const basePrices = optPrices.length > 0 ? optPrices : [sellingPrice];
 
-    const specificProducts = availableOpts.map((opt) => {
+    const specificProducts = allOpts.map((opt) => {
       let optName = (opt.name || opt.optionName || '').trim();
       if (optName.length > 50) optName = optName.substring(0, 50);
 
       const optPrice = parseInt(opt.sellingPrice || opt.price || 0, 10);
       const finalPrice = optPrice > 0 ? optPrice : Math.round(sellingPrice);
-      const optStock = parseInt(opt.quantity || opt.stockQuantity || stock, 10);
+      const optStock = Math.max(0, parseInt(opt.stockQuantity ?? opt.quantity ?? 0, 10));
+      const isOutOfStock = optStock === 0 || opt.soldOut === true || opt.soldOutFlag === 'Y' || opt.statusType === 'OUTOFSTOCK';
 
       return {
-        statusType: 'SALE',
+        statusType: isOutOfStock ? 'OUTOFSTOCK' : 'SALE',
         saleType: 'NEW',
         salePrice: Math.round(finalPrice),
         stockQuantity: Math.max(0, optStock),
@@ -145,7 +149,7 @@ module.exports = async function handler(req, res) {
     };
 
     console.log('[group-register] name:', cleanedName,
-      '| options:', availableOpts.length,
+      '| options:', allOpts.length,
       '| guideId:', guideId,
       '| prices:', basePrices.slice(0, 3).join(','));
 

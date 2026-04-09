@@ -33,27 +33,28 @@ function cleanProductName(rawName) {
 
 function buildOptions(oyOptions) {
   if (!oyOptions || oyOptions.length === 0) return null;
-  const availableOpts = oyOptions.filter((o) => !o.soldOut);
-  if (availableOpts.length === 0) return null;
 
-  console.log('[buildOptions] Input:', JSON.stringify(availableOpts.slice(0, 3)));
+  console.log('[buildOptions] Input:', JSON.stringify(oyOptions.slice(0, 3)));
 
-  const basePrices = availableOpts
+  const basePrices = oyOptions
     .map((o) => parseInt(o.sellingPrice || o.price || 0, 10))
     .filter((p) => p > 0);
   const minPrice = basePrices.length > 0 ? Math.min(...basePrices) : 0;
 
-  const combinations = availableOpts.map((opt, i) => {
+  const combinations = oyOptions.map((opt, i) => {
     const optPrice = parseInt(opt.sellingPrice || opt.price || 0, 10);
     const priceDiff = minPrice > 0 && optPrice > 0 ? optPrice - minPrice : 0;
     let name = (opt.name || opt.optionName || `옵션${i + 1}`).trim();
     if (name.length > 25) name = name.substring(0, 25);
 
+    const stockQty = Math.max(0, parseInt(opt.quantity || opt.stockQuantity || 0, 10));
+    const unusable = opt.soldOut === true || opt.soldOutFlag === 'Y' || stockQty <= 0;
+
     return {
       optionName1: name,
-      stockQuantity: parseInt(opt.quantity || opt.stockQuantity || 999, 10),
+      stockQuantity: stockQty,
       price: Math.max(0, Math.round(priceDiff)),
-      usable: true,
+      usable: !unusable,
     };
   });
 

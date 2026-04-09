@@ -80,19 +80,33 @@ const Register = {
 
   showStockPopup(opts, product) {
     return new Promise((resolve) => {
-      const available = opts.filter((o) => !o.soldOut);
-      const rows = available.map((o, i) => {
-        const stock = parseInt(o.quantity || o.stockQuantity || 999, 10);
-        return `<tr>
-          <td style="padding:6px 8px;font-size:13px;">${o.name || o.optionName || '옵션' + (i + 1)}</td>
+      const isSoldOutFlag = (o) => o.soldOut === true || o.soldOutFlag === 'Y';
+      const rows = opts.map((o, i) => {
+        const isSoldOut = isSoldOutFlag(o);
+        const stock = isSoldOut ? 0 : parseInt(o.quantity || o.stockQuantity || 999, 10);
+        const rowStyle = isSoldOut ? 'background:#fff5f5;' : '';
+        const soldOutBadge = isSoldOut ? ' <span style="color:#dc2626;font-size:11px;font-weight:600;">(품절)</span>' : '';
+        const optLabel = this._escHtml(o.name || o.optionName || '옵션' + (i + 1));
+        const borderColor = isSoldOut ? '#fca5a5' : '#ddd';
+        return `<tr style="${rowStyle}">
+          <td style="padding:6px 8px;font-size:13px;">${optLabel}${soldOutBadge}</td>
           <td style="padding:6px 8px;text-align:right;font-size:13px;">${o.price ? o.price.toLocaleString() + '원' : '-'}</td>
-          <td style="padding:6px 4px;text-align:center;"><input type="number" class="stock-input" data-idx="${i}" value="${stock}" min="0" max="9999" style="width:60px;padding:4px;border:1px solid #ddd;border-radius:4px;text-align:center;font-size:13px;" /></td>
+          <td style="padding:6px 4px;text-align:center;">
+            <input type="number" class="stock-input" data-idx="${i}"
+              value="${stock}" min="0" max="9999"
+              style="width:60px;padding:4px;border:1px solid ${borderColor};border-radius:4px;text-align:center;font-size:13px;" />
+          </td>
         </tr>`;
       }).join('');
 
+      const hasSoldOut = opts.some((o) => isSoldOutFlag(o));
+      const soldOutHint = hasSoldOut
+        ? '<br><span style="color:#dc2626;font-size:12px;">⚠ 품절 옵션은 재고 0으로 표시됩니다. 재입고 시 재고를 입력하세요.</span>'
+        : '';
+
       UI.showModal(`
         <h3 style="margin:0 0 12px;">옵션 재고 확인</h3>
-        <p style="font-size:13px;color:#666;margin:0 0 12px;">${product.name} — 옵션 ${available.length}개</p>
+        <p style="font-size:13px;color:#666;margin:0 0 12px;">${this._escHtml(product.name)} — 옵션 ${opts.length}개${soldOutHint}</p>
         <div style="max-height:300px;overflow-y:auto;">
           <table style="width:100%;border-collapse:collapse;">
             <thead><tr style="background:#f1f5f9;">
@@ -112,7 +126,15 @@ const Register = {
       document.getElementById('stock-popup-confirm').onclick = () => {
         document.querySelectorAll('.stock-input').forEach((inp) => {
           const idx = parseInt(inp.dataset.idx, 10);
-          if (available[idx]) available[idx].stockQuantity = Math.max(0, parseInt(inp.value, 10) || 0);
+          if (opts[idx]) {
+            const newStock = Math.max(0, parseInt(inp.value, 10) || 0);
+            opts[idx].stockQuantity = newStock;
+            if (newStock > 0) opts[idx].soldOut = false;
+            else {
+              opts[idx].soldOut = true;
+              if (opts[idx].soldOutFlag !== undefined) opts[idx].soldOutFlag = 'Y';
+            }
+          }
         });
         UI.hideModal();
         resolve(opts);
@@ -130,17 +152,19 @@ const Register = {
     const calc = Margin.calculate(product.price, marginRate);
     const cleanedBaseName = this.cleanProductName(product.name);
 
-    let opts = (product.options || []).filter((o) => !o.soldOut);
-    if (opts.length === 0 && typeof OptionModal !== 'undefined') {
+    let allOpts = product.options || [];
+    if (allOpts.length === 0 && typeof OptionModal !== 'undefined') {
       try {
         const mo = await OptionModal.open(product);
         if (mo?.length > 0) {
           product.options = mo;
           Storage.updateQueueItem(goodsNo, { options: mo });
-          opts = mo.filter((o) => !o.soldOut);
+          allOpts = mo;
         }
       } catch { /* cancelled */ }
     }
+
+    let opts = allOpts;
     if (opts.length > 0) opts = await this.showStockPopup(opts, product);
 
     const optCount = opts.length;
@@ -324,6 +348,10 @@ const Register = {
 
       if (opts.length > 1) {
         const optPrices = opts.map((o) => o.price || 0).filter((p) => p > 0);
+        const stockOut = (o) => {
+          const sq = parseInt(o.stockQuantity ?? o.quantity ?? 0, 10);
+          return sq === 0 || o.soldOut === true || o.soldOutFlag === 'Y';
+        };
         if (optPrices.length > 0) {
           const minOyPrice = Math.min(...optPrices);
           const minCalc = Margin.calculate(minOyPrice, marginRate);
@@ -331,6 +359,12 @@ const Register = {
           registrationOptions = opts.map((o) => ({
             ...o,
             sellingPrice: Margin.calculate(o.price || minOyPrice, marginRate).sellingPrice,
+            statusType: stockOut(o) ? 'OUTOFSTOCK' : 'SALE',
+          }));
+        } else {
+          registrationOptions = opts.map((o) => ({
+            ...o,
+            statusType: stockOut(o) ? 'OUTOFSTOCK' : 'SALE',
           }));
         }
       }
