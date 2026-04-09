@@ -47,7 +47,7 @@ function buildOptions(oyOptions) {
     let name = (opt.name || opt.optionName || `옵션${i + 1}`).trim();
     if (name.length > 25) name = name.substring(0, 25);
 
-    const stockQty = Math.max(0, parseInt(opt.quantity || opt.stockQuantity || 0, 10));
+    const stockQty = Math.max(0, parseInt(opt.stockQuantity ?? opt.quantity ?? 0, 10));
     const unusable = opt.soldOut === true || opt.soldOutFlag === 'Y' || stockQty <= 0;
 
     return {

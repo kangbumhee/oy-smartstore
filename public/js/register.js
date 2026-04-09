@@ -154,6 +154,7 @@ const Register = {
           if (opts[idx]) {
             const newStock = Math.max(0, parseInt(inp.value, 10) || 0);
             opts[idx].stockQuantity = newStock;
+            opts[idx].quantity = newStock;
             if (newStock > 0) opts[idx].soldOut = false;
             else {
               opts[idx].soldOut = true;
