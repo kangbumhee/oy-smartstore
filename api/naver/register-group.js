@@ -122,25 +122,38 @@ function pickDefaultValue(spo) {
 
 const GROUP_STATUS_URL = `${NAVER_API_BASE}/v2/standard-group-products/status`;
 
-async function pollGroupStatus(headers, timeoutMs, intervalMs) {
+async function pollGroupStatus(headers, requestId, timeoutMs, intervalMs) {
   const start = Date.now();
+  const url = `${GROUP_STATUS_URL}?requestId=${encodeURIComponent(requestId)}`;
+  console.log('[group-poll] polling:', url);
+
   while (Date.now() - start < timeoutMs) {
     await new Promise((r) => setTimeout(r, intervalMs));
     try {
-      const r = await proxyFetch(GROUP_STATUS_URL, {
+      const r = await proxyFetch(url, {
         headers: { ...headers, Accept: 'application/json;charset=UTF-8' },
       });
       if (!r.ok) {
-        console.warn('[group-poll] status check failed:', r.status);
+        const txt = await r.text();
+        console.warn('[group-poll] status check failed:', r.status, txt.substring(0, 200));
         continue;
       }
       const data = await r.json();
+      console.log('[group-poll] raw:', JSON.stringify(data).substring(0, 400));
+
       const progress = data.progress || data;
       const state = progress.state || data.state;
-      console.log('[group-poll] state:', state, 'progress:', progress.progress);
+      console.log('[group-poll] state:', state);
 
       if (state === 'COMPLETED' || state === 'ERROR') {
-        return { ...progress, ...data, state };
+        return {
+          state,
+          groupProductNo: data.groupProductNo || progress.groupProductNo || null,
+          requestId: data.requestId || requestId,
+          productNos: data.productNos || progress.productNos || [],
+          failReason: data.failReason || progress.failReason || null,
+          raw: data,
+        };
       }
     } catch (e) {
       console.warn('[group-poll] error:', e.message);
@@ -293,19 +306,20 @@ module.exports = async function handler(req, res) {
     if (r.ok) {
       const progress = data.progress || data;
       const state = progress.state || 'QUEUED';
-      console.log('[group-register] Accepted, state:', state);
+      const reqId = data.requestId || progress.requestId || null;
+      console.log('[group-register] Accepted, state:', state, 'requestId:', reqId);
 
-      if (state === 'QUEUED' || state === 'PROCESSING') {
-        const final = await pollGroupStatus(headers, 50000, 3000);
+      if ((state === 'QUEUED' || state === 'PROCESSING') && reqId) {
+        const final = await pollGroupStatus(headers, reqId, 50000, 3000);
         if (final && final.state === 'COMPLETED') {
           console.log('[group-register] COMPLETED:', JSON.stringify(final).substring(0, 300));
           return res.status(200).json({
             success: true,
             isGroup: true,
-            result: final,
-            groupProductNo: final.groupProductNo || null,
-            requestId: final.requestId || null,
-            productNos: final.productNos || [],
+            result: final.raw || final,
+            groupProductNo: final.groupProductNo,
+            requestId: final.requestId,
+            productNos: final.productNos,
             state: 'COMPLETED',
           });
         }
@@ -318,16 +332,16 @@ module.exports = async function handler(req, res) {
             message: '그룹등록 비동기 처리 실패',
           });
         }
-        console.log('[group-register] Poll timeout, returning QUEUED');
+        console.log('[group-register] Poll timeout, returning QUEUED with requestId');
       }
 
       return res.status(200).json({
         success: true,
         isGroup: true,
         result: data,
-        groupProductNo: progress.groupProductNo || null,
-        requestId: progress.requestId || null,
-        productNos: progress.productNos || [],
+        groupProductNo: data.groupProductNo || progress.groupProductNo || null,
+        requestId: reqId,
+        productNos: data.productNos || progress.productNos || [],
         state,
       });
     }
