@@ -40,8 +40,14 @@ const Register = {
     UI.showToast('대기열에서 제거됨', 'info');
   },
 
+  selectAllOptionsForProduct(goodsNo) {
+    document.querySelectorAll('.opt-check').forEach((cb) => {
+      if (cb.dataset.goodsNo === String(goodsNo)) cb.checked = true;
+    });
+  },
+
   removeSelectedOptions(goodsNo) {
-    const checkboxes = Array.from(document.querySelectorAll('.opt-check:checked')).filter((cb) => cb.dataset.goodsNo === goodsNo);
+    const checkboxes = Array.from(document.querySelectorAll('.opt-check:checked')).filter((cb) => cb.dataset.goodsNo === String(goodsNo));
     if (checkboxes.length === 0) {
       UI.showToast('제거할 옵션을 선택하세요', 'info');
       return;

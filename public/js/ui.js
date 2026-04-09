@@ -120,8 +120,9 @@ const UI = {
     </label>`;
   }).join('')}
             </div>
-            <div style="margin-top:8px;">
-              <button type="button" class="btn btn-outline btn-sm" onclick="Register.removeSelectedOptions(${JSON.stringify(product.goodsNo)})">선택 옵션 제거</button>
+            <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+              <button type="button" class="btn btn-outline btn-sm" onclick='Register.removeSelectedOptions(${JSON.stringify(product.goodsNo)})'>선택 옵션 제거</button>
+              <button type="button" class="btn btn-outline btn-sm" onclick='Register.selectAllOptionsForProduct(${JSON.stringify(product.goodsNo)})'>전체 옵션 선택</button>
             </div>
           </div>
         ` : ''}
