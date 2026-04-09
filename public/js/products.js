@@ -1,19 +1,15 @@
-/* Registered Products Page - sync & delete */
+/* Registered Products Page — checkbox select + sync + delete */
 const Products = {
   _syncing: false,
 
   _esc(s) {
-    return String(s || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/"/g, '&quot;');
+    return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
   },
 
   render() {
     const list = Storage.getRegistered();
     const listEl = document.getElementById('products-list');
     const emptyEl = document.getElementById('products-empty');
-
     if (!listEl || !emptyEl) return;
 
     if (list.length === 0) {
@@ -25,14 +21,14 @@ const Products = {
     emptyEl.style.display = 'none';
     listEl.innerHTML = `
       <div class="products-toolbar">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;">
+          <input type="checkbox" id="products-select-all" onchange="Products.toggleAll(this.checked)" />
+          전체 선택
+        </label>
         <span class="products-count">총 ${list.length}개 상품</span>
         <div class="products-toolbar-actions">
-          <button type="button" class="btn btn-primary btn-sm" onclick="Products.syncAll()" id="sync-all-btn">
-            🔄 전체 재고 동기화
-          </button>
-          <button type="button" class="btn btn-danger btn-sm" onclick="Products.removeAll()" id="remove-all-btn">
-            🗑 전체 목록 삭제
-          </button>
+          <button type="button" class="btn btn-primary btn-sm" onclick="Products.syncAll()" id="sync-all-btn">동기화 (전체)</button>
+          <button type="button" class="btn btn-danger btn-sm" onclick="Products.removeSelected()" id="remove-selected-btn">선택 삭제</button>
         </div>
       </div>
       ${list.map((p, i) => this.renderItem(p, i)).join('')}
@@ -45,20 +41,20 @@ const Products = {
     const name = this._esc(product.name || '');
     const date = product.registeredAt ? new Date(product.registeredAt).toLocaleDateString('ko-KR') : '';
     const productNo = product.productNo || product.naverProductNo || '';
+    const channelNo = product.channelProductNo || productNo;
     const goodsNo = product.goodsNo || '';
-    const rowId = `reg-row-${index}-${String(productNo || goodsNo || index).replace(/[^a-zA-Z0-9_-]/g, '_')}`;
-    const storeUrl = productNo ? `https://smartstore.naver.com/i/${encodeURIComponent(productNo)}` : '';
+    const storeUrl = channelNo ? `https://smartstore.naver.com/i/${encodeURIComponent(channelNo)}` : '';
     const syncStatus = product.lastSyncAt
-      ? `마지막 동기화: ${new Date(product.lastSyncAt).toLocaleString('ko-KR')}`
-      : '동기화 안됨';
+      ? `동기화: ${new Date(product.lastSyncAt).toLocaleString('ko-KR')}`
+      : '';
     const syncClass = product.lastSyncAt ? 'synced' : 'not-synced';
     const optionCount = (product.syncedOptions || []).length;
-
     const pnAttr = this._esc(productNo);
     const gAttr = this._esc(goodsNo);
 
     return `
-      <div class="registered-item" id="${rowId}">
+      <div class="registered-item" data-idx="${index}">
+        <input type="checkbox" class="product-checkbox" data-idx="${index}" style="flex-shrink:0;width:18px;height:18px;cursor:pointer;margin-right:8px;" />
         <img class="registered-item-img" src="${thumb}" alt="" onerror="this.style.display='none'" />
         <div class="registered-item-info">
           <div class="registered-item-name">${name}</div>
@@ -66,17 +62,41 @@ const Products = {
             <span>판매가: ${Margin.formatPrice(product.sellingPrice)}</span>
             <span>등록일: ${date}</span>
             ${optionCount > 0 ? `<span>옵션: ${optionCount}개</span>` : ''}
-            <span class="sync-status ${syncClass}">${this._esc(syncStatus)}</span>
+            ${syncStatus ? `<span class="sync-status ${syncClass}">${this._esc(syncStatus)}</span>` : ''}
           </div>
           <div class="registered-item-actions">
             ${storeUrl ? `<a class="btn btn-outline btn-xs" href="${storeUrl}" target="_blank" rel="noopener" onclick="event.stopPropagation()">스토어 보기 ↗</a>` : ''}
-            ${productNo && goodsNo ? `<button type="button" class="btn btn-primary btn-xs oy-btn-sync" data-product-no="${pnAttr}" data-goods-no="${gAttr}">🔄 재고 동기화</button>` : ''}
-            ${productNo ? `<button type="button" class="btn btn-danger btn-xs oy-btn-delete" data-product-no="${pnAttr}" title="네이버 판매중지 + 목록 제거">🗑 삭제</button>` : ''}
-            <button type="button" class="btn btn-outline btn-xs oy-btn-remove" data-product-no="${pnAttr}" data-goods-no="${gAttr}" title="목록에서만 제거 (네이버 상태 유지)">✕ 목록 제거</button>
+            ${productNo && goodsNo ? `<button type="button" class="btn btn-primary btn-xs oy-btn-sync" data-product-no="${pnAttr}" data-goods-no="${gAttr}">재고 동기화</button>` : ''}
+            ${productNo ? `<button type="button" class="btn btn-danger btn-xs oy-btn-delete" data-product-no="${pnAttr}" title="네이버 판매중지 + 목록 제거">삭제</button>` : ''}
           </div>
         </div>
       </div>
     `;
+  },
+
+  toggleAll(checked) {
+    document.querySelectorAll('.product-checkbox').forEach((cb) => { cb.checked = checked; });
+  },
+
+  getSelectedIndices() {
+    const indices = [];
+    document.querySelectorAll('.product-checkbox:checked').forEach((cb) => {
+      indices.push(parseInt(cb.dataset.idx, 10));
+    });
+    return indices;
+  },
+
+  removeSelected() {
+    const indices = this.getSelectedIndices();
+    if (indices.length === 0) return UI.showToast('삭제할 상품을 선택하세요', 'info');
+
+    if (!confirm(`선택한 ${indices.length}개 상품을 목록에서 제거하시겠습니까?\n\n※ 네이버 스마트스토어 상품은 삭제되지 않습니다.`)) return;
+
+    const list = Storage.getRegistered();
+    const remaining = list.filter((_, i) => !indices.includes(i));
+    Storage.set(Storage.KEYS.REGISTERED, remaining);
+    this.render();
+    UI.showToast(`${indices.length}개 상품 목록에서 제거됨`, 'success');
   },
 
   bindRowActions() {
@@ -97,49 +117,7 @@ const Products = {
         if (pn) this.deleteProduct(pn);
         return;
       }
-      const removeEl = e.target.closest('.oy-btn-remove');
-      if (removeEl) {
-        const pn = removeEl.getAttribute('data-product-no') || '';
-        const gn = removeEl.getAttribute('data-goods-no') || '';
-        if (pn) this.removeFromList(pn);
-        else if (gn) this.removeFromListByGoodsNo(gn);
-        return;
-      }
     });
-  },
-
-  removeFromList(productNo) {
-    if (!productNo) return;
-    const row = Storage.getRegistered().find((p) => (p.productNo || p.naverProductNo) === productNo);
-    const label = (row?.name || productNo).substring(0, 40);
-    if (!confirm(`"${label}..." 을(를) 목록에서 제거하시겠습니까?\n\n※ 네이버 스마트스토어에서는 삭제되지 않습니다.\n   (스토어 상품은 그대로 유지됩니다)`)) return;
-
-    Storage.removeRegistered(productNo);
-    this.render();
-    UI.showToast('목록에서 제거됨', 'info');
-  },
-
-  removeFromListByGoodsNo(goodsNo) {
-    if (!goodsNo) return;
-    const row = Storage.getRegistered().find((p) => p.goodsNo === goodsNo);
-    const label = (row?.name || goodsNo).substring(0, 40);
-    if (!confirm(`"${label}..." 을(를) 목록에서 제거하시겠습니까?\n\n※ 네이버 스마트스토어에서는 삭제되지 않습니다.`)) return;
-
-    const next = Storage.getRegistered().filter((p) => p.goodsNo !== goodsNo);
-    Storage.set(Storage.KEYS.REGISTERED, next);
-    this.render();
-    UI.showToast('목록에서 제거됨', 'info');
-  },
-
-  removeAll() {
-    const list = Storage.getRegistered();
-    if (list.length === 0) return UI.showToast('삭제할 상품이 없습니다', 'info');
-
-    if (!confirm(`등록된 상품 ${list.length}개를 모두 목록에서 제거하시겠습니까?\n\n※ 네이버 스마트스토어 상품은 삭제되지 않습니다.\n   (스토어 상품은 그대로 유지됩니다)`)) return;
-
-    Storage.set(Storage.KEYS.REGISTERED, []);
-    this.render();
-    UI.showToast(`${list.length}개 상품 목록에서 제거됨`, 'success');
   },
 
   async deleteProduct(productNo) {
@@ -149,18 +127,16 @@ const Products = {
     if (!confirm(`"${label}..." 상품을 삭제하시겠습니까?\n\n• 네이버 스마트스토어에서 판매중지 처리\n• 등록 목록에서 제거`)) return;
 
     UI.showToast('상품 삭제 중...', 'info', 2000);
-
     try {
       await API.obtainNaverToken();
       const result = await API.deleteNaverProduct(productNo);
-
       if (result.success) {
         Storage.removeRegistered(productNo);
         this.render();
         UI.showToast('삭제 완료 (판매중지)', 'success');
       } else {
         const errMsg = String(result.data?.message || result.error || result.data?.errorMessage || '삭제 실패');
-        if (errMsg.includes('NOT_FOUND') || errMsg.includes('찾을 수 없')) {
+        if (errMsg.includes('NOT_FOUND') || errMsg.includes('찾을 수 없') || errMsg.includes('존재하지 않는')) {
           Storage.removeRegistered(productNo);
           this.render();
           UI.showToast('로컬에서 제거됨 (네이버에 해당 상품 없음)', 'info');
@@ -180,7 +156,7 @@ const Products = {
     }
 
     const btn = document.querySelector(`.oy-btn-sync[data-product-no="${CSS.escape(productNo)}"]`);
-    if (btn) { btn.disabled = true; btn.textContent = '⏳ 동기화 중...'; }
+    if (btn) { btn.disabled = true; btn.textContent = '동기화 중...'; }
 
     try {
       await API.obtainNaverToken();
@@ -207,13 +183,13 @@ const Products = {
         if (optData.success && optData.options?.length > 0) {
           oyOptions = optData.options;
         }
-      } catch { /* 서버 API 실패 */ }
+      } catch { /* server API fail */ }
 
       if (oyOptions.length === 0) {
         try {
           oyOptions = await this._fetchOptionsViaExtension(goodsNo);
         } catch {
-          UI.showToast('올리브영 옵션 가져오기 실패 — 크롬 확장 확인', 'error');
+          UI.showToast('올리브영 옵션 가져오기 실패', 'error');
           return false;
         }
       }
@@ -224,29 +200,20 @@ const Products = {
       }
 
       const updatedCombos = this._matchAndUpdateOptions(naverCombos, oyOptions);
-
       if (updatedCombos.length === 0) {
         UI.showToast('매칭 가능한 옵션이 없습니다', 'error');
         return false;
       }
 
-      const syncResult = await API.syncOptionStock({
-        productNo,
-        optionCombinations: updatedCombos,
-      });
-
+      const syncResult = await API.syncOptionStock({ productNo, optionCombinations: updatedCombos });
       if (syncResult.success) {
         Storage.updateRegistered(productNo, {
           lastSyncAt: Date.now(),
-          syncedOptions: updatedCombos.map((c) => ({
-            name: c.optionName1,
-            stock: c.stockQuantity,
-            usable: c.usable,
-          })),
+          syncedOptions: updatedCombos.map((c) => ({ name: c.optionName1, stock: c.stockQuantity, usable: c.usable })),
         });
         this.render();
         const soldOutCount = updatedCombos.filter((c) => !c.usable).length;
-        UI.showToast(`재고 동기화 완료! ${updatedCombos.length}개 옵션 (품절 ${soldOutCount}개)`, 'success');
+        UI.showToast(`동기화 완료! ${updatedCombos.length}개 옵션 (품절 ${soldOutCount}개)`, 'success');
         return true;
       }
       const errMsg = String(syncResult.data?.message || syncResult.error || '동기화 실패');
@@ -257,45 +224,29 @@ const Products = {
       return false;
     } finally {
       const b = document.querySelector(`.oy-btn-sync[data-product-no="${CSS.escape(productNo)}"]`);
-      if (b) { b.disabled = false; b.textContent = '🔄 재고 동기화'; }
+      if (b) { b.disabled = false; b.textContent = '재고 동기화'; }
     }
   },
 
   _matchAndUpdateOptions(naverCombos, oyOptions) {
     return naverCombos.map((combo) => {
       const naverName = (combo.optionName1 || '').trim().toLowerCase();
-
       let matched = oyOptions.find((oy) => {
         const oyName = (oy.name || oy.optionName || '').trim().toLowerCase();
         return oyName === naverName;
       });
-
       if (!matched) {
         matched = oyOptions.find((oy) => {
           const oyName = (oy.name || oy.optionName || '').trim().toLowerCase();
           return naverName.includes(oyName) || oyName.includes(naverName);
         });
       }
-
       if (matched) {
         const stock = parseInt(matched.quantity || matched.stockQuantity || 0, 10);
         const soldOut = matched.soldOut === true || matched.soldOutFlag === 'Y' || stock <= 0;
-        return {
-          id: combo.id,
-          optionName1: combo.optionName1,
-          stockQuantity: soldOut ? 0 : Math.min(stock, 999),
-          price: combo.price || 0,
-          usable: !soldOut,
-        };
+        return { id: combo.id, optionName1: combo.optionName1, stockQuantity: soldOut ? 0 : Math.min(stock, 999), price: combo.price || 0, usable: !soldOut };
       }
-
-      return {
-        id: combo.id,
-        optionName1: combo.optionName1,
-        stockQuantity: combo.stockQuantity || 0,
-        price: combo.price || 0,
-        usable: combo.usable !== false,
-      };
+      return { id: combo.id, optionName1: combo.optionName1, stockQuantity: combo.stockQuantity || 0, price: combo.price || 0, usable: combo.usable !== false };
     });
   },
 
@@ -303,19 +254,14 @@ const Products = {
     return new Promise((resolve, reject) => {
       const url = `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${encodeURIComponent(goodsNo)}&autoFetch=true`;
       const popup = window.open(url, 'oy_sync_' + goodsNo, 'width=800,height=600');
-
       let checkClosed = null;
-
-      const cleanup = () => {
-        if (checkClosed) clearInterval(checkClosed);
-        checkClosed = null;
-      };
+      const cleanup = () => { if (checkClosed) clearInterval(checkClosed); checkClosed = null; };
 
       const timeout = setTimeout(() => {
         window.removeEventListener('message', handler);
         cleanup();
         if (popup && !popup.closed) popup.close();
-        reject(new Error('옵션 가져오기 시간 초과 (15초)'));
+        reject(new Error('시간 초과 (15초)'));
       }, 15000);
 
       function handler(event) {
@@ -326,16 +272,11 @@ const Products = {
           window.removeEventListener('message', handler);
           cleanup();
           if (popup && !popup.closed) popup.close();
-          if (data.success && data.options?.length > 0) {
-            resolve(data.options);
-          } else {
-            reject(new Error(data.error || '옵션 없음'));
-          }
+          if (data.success && data.options?.length > 0) resolve(data.options);
+          else reject(new Error(data.error || '옵션 없음'));
         }
       }
-
       window.addEventListener('message', handler);
-
       checkClosed = setInterval(() => {
         if (popup && popup.closed) {
           clearTimeout(timeout);
@@ -352,13 +293,10 @@ const Products = {
     this._syncing = true;
 
     const list = Storage.getRegistered();
-    if (list.length === 0) {
-      this._syncing = false;
-      return UI.showToast('등록된 상품이 없습니다', 'info');
-    }
+    if (list.length === 0) { this._syncing = false; return UI.showToast('등록된 상품이 없습니다', 'info'); }
 
     const syncBtn = document.getElementById('sync-all-btn');
-    if (syncBtn) { syncBtn.disabled = true; syncBtn.textContent = '동기화 중... (0/' + list.length + ')'; }
+    if (syncBtn) { syncBtn.disabled = true; syncBtn.textContent = `동기화 중... (0/${list.length})`; }
 
     let successCount = 0;
     let failCount = 0;
@@ -366,9 +304,9 @@ const Products = {
     try {
       await API.obtainNaverToken();
     } catch (e) {
-      UI.showToast('토큰 발급 실패: ' + e.message, 'error');
+      UI.showToast('토큰 실패: ' + e.message, 'error');
       this._syncing = false;
-      if (syncBtn) { syncBtn.disabled = false; syncBtn.textContent = '🔄 전체 재고 동기화'; }
+      if (syncBtn) { syncBtn.disabled = false; syncBtn.textContent = '동기화 (전체)'; }
       return;
     }
 
@@ -378,22 +316,17 @@ const Products = {
       const goodsNo = p.goodsNo;
       if (syncBtn) syncBtn.textContent = `동기화 중... (${i + 1}/${list.length})`;
 
-      if (!productNo || !goodsNo) {
-        failCount++;
-      } else {
+      if (!productNo || !goodsNo) { failCount++; }
+      else {
         const ok = await this.syncOne(productNo, goodsNo);
-        if (ok) successCount++;
-        else failCount++;
+        if (ok) successCount++; else failCount++;
       }
-
-      if (i < list.length - 1) {
-        await new Promise((r) => setTimeout(r, 1000));
-      }
+      if (i < list.length - 1) await new Promise((r) => setTimeout(r, 1000));
     }
 
     this._syncing = false;
-    if (syncBtn) { syncBtn.disabled = false; syncBtn.textContent = '🔄 전체 재고 동기화'; }
+    if (syncBtn) { syncBtn.disabled = false; syncBtn.textContent = '동기화 (전체)'; }
     this.render();
-    UI.showToast(`전체 동기화 완료! 성공 ${successCount}개, 실패 ${failCount}개`, successCount > 0 ? 'success' : 'error');
+    UI.showToast(`동기화 완료! 성공 ${successCount}, 실패 ${failCount}`, successCount > 0 ? 'success' : 'error');
   },
 };

@@ -167,43 +167,59 @@ async function handleDescription(body, aiConfig, res) {
     ? options.slice(0, 10).map(o => o.name || o.optionName || '').filter(Boolean).join(', ')
     : '단일상품';
 
-  const prompt = `당신은 네이버 스마트스토어 상세페이지 전문 디자이너입니다.
-상품명: ${name}
-브랜드: ${brand}
-가격: ${Number(price).toLocaleString()}원
-카테고리: ${category}
-옵션: ${optSummary}
-평점: ${avgRating}
-리뷰수: ${reviewCount}개
+  const prompt = `당신은 네이버 스마트스토어 상세페이지 전문 디자이너 겸 뷰티 전문가입니다.
+상품명에서 제품 종류, 용량, 성분, 효능을 최대한 유추하여 전문적이고 매력적인 상세페이지를 만드세요.
 
-요구사항:
-1. 깔끔한 HTML (inline CSS만, <style> 태그 금지)
-2. 반드시 아래 순서대로 섹션을 만들어:
-   - 상품 소개 (매력적인 카피)
-   - 주요 특징 (3-5개, 아이콘/이모지 사용)
-   - 사용방법
-   - 주의사항
-   - 제품정보 테이블 (아래 형식 필수):
-     <table> 형태로 제품명, 용량/수량, 사용기간, 브랜드, 보관방법을 포함
-     (정보를 모를 경우 상품명에서 유추하여 작성)
-   - 전성분 (화장품인 경우 일반적인 성분 추정 목록 작성, 아니면 생략)
-3. 색상: 메인 #FF6B35, 서브 #004E89, 배경 #F7F7F7
-4. 모바일 최적화: 텍스트 최소 16px, 제목 22px+, line-height 1.8+
-5. 이미지 태그 없이 텍스트만
-6. 매력적인 카피
-7. 각 섹션 <section> 태그
+## 상품 정보
+- 상품명: ${name}
+- 브랜드: ${brand || '(상품명에서 유추)'}
+- 판매가: ${Number(price).toLocaleString()}원
+- 카테고리: ${category}
+- 옵션: ${optSummary}
+${avgRating ? `- 평점: ${avgRating}` : ''}
+${reviewCount ? `- 리뷰수: ${reviewCount}개` : ''}
 
-제품정보 테이블 예시 (inline CSS로):
-<section>
-<h2>제품 정보</h2>
-<table style="width:100%;border-collapse:collapse;margin:16px 0;">
-<tr style="border-bottom:1px solid #eee;"><td style="padding:12px;font-weight:600;width:120px;background:#f9f9f9;">제품명</td><td style="padding:12px;">상품명</td></tr>
-<tr style="border-bottom:1px solid #eee;"><td style="padding:12px;font-weight:600;background:#f9f9f9;">용량</td><td style="padding:12px;">추정 용량</td></tr>
-<tr style="border-bottom:1px solid #eee;"><td style="padding:12px;font-weight:600;background:#f9f9f9;">사용기간</td><td style="padding:12px;">개봉 후 12개월 이내 권장</td></tr>
-<tr style="border-bottom:1px solid #eee;"><td style="padding:12px;font-weight:600;background:#f9f9f9;">브랜드</td><td style="padding:12px;">브랜드명</td></tr>
-<tr style="border-bottom:1px solid #eee;"><td style="padding:12px;font-weight:600;background:#f9f9f9;">보관방법</td><td style="padding:12px;">직사광선을 피해 서늘한 곳에 보관</td></tr>
-</table>
-</section>
+## 필수 섹션 (아래 순서대로 작성)
+
+### 1. 히어로 배너
+- 상품명 + 브랜드 + 한줄 카피
+- 그라데이션 배경 (#FF6B35 → #FF8F60)
+
+### 2. 상품 소개
+- 이 제품이 왜 좋은지, 어떤 피부 고민을 해결하는지, 사용 후 어떤 결과가 기대되는지
+- 상품명에서 키워드(예: 수분, 미백, 진정, 글로우, 톤업, 리프팅 등)를 추출하여 구체적으로 작성
+
+### 3. 주요 특징 (4-5개)
+- 각 특징에 이모지 + 제목 + 설명 1-2문장
+- 용량/제형(크림, 세럼, 스틱, 패드 등)도 상품명에서 유추하여 언급
+
+### 4. 핵심 성분
+- 상품명과 카테고리에서 예상되는 주요 성분 3-5가지를 유추하여 작성
+- 각 성분의 효능을 간단히 설명 (예: 히알루론산 → 수분 보습, 나이아신아마이드 → 톤업)
+
+### 5. 사용방법
+- 구체적인 사용 순서와 팁
+
+### 6. 이런 분께 추천
+- 3-4가지 추천 대상
+
+### 7. 주의사항
+
+### 8. 제품 정보 테이블
+반드시 <table>로 아래 항목 포함:
+- 제품명, 용량/수량(상품명에서 유추, 예: 50ml, 30g, 10매), 제형, 사용기간, 브랜드, 제조국, 보관방법
+- 모르는 정보는 상품 유형에 맞게 합리적으로 유추
+
+### 9. 전성분 (화장품인 경우만)
+- 해당 제품 유형의 일반적 전성분 목록을 작성
+
+## 디자인 규칙
+- inline CSS만 (<style> 태그 금지)
+- 색상: 메인 #FF6B35, 서브 #004E89, 배경 #fff/#F7F7F7
+- 모바일 최적화: 텍스트 16px+, 제목 22px+, line-height 1.8+
+- 이미지 태그 없이 텍스트만
+- 각 섹션 <section> 태그로 감싸기
+- 전체를 <div style="max-width:100%;margin:0 auto;font-family:'Noto Sans KR',sans-serif;">로 감싸기
 
 HTML 코드만 출력 (\`\`\`html 태그 없이):`;
 

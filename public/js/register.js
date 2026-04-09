@@ -351,7 +351,8 @@ const Register = {
           marginRate,
           categoryId,
           categoryName,
-          productNo: regData.result?.smartstoreChannelProductNo || regData.result?.originProductNo || '',
+          productNo: regData.result?.originProductNo || '',
+          channelProductNo: regData.result?.smartstoreChannelProductNo || '',
         });
         Storage.removeFromQueue(goodsNo);
         this._addCloseButton(totalTime, cleanedBaseName, true);
