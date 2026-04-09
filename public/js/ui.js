@@ -24,6 +24,10 @@ const UI = {
     if (el) el.style.display = 'none';
   },
 
+  _escHtml(s) {
+    return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  },
+
   renderProductCard(product) {
     const thumb = product.thumbnail || product.goodsImage || product.imageUrl || '';
     const price = Number(product.price || product.priceToPay || product.salePrice || 0);
@@ -97,11 +101,27 @@ const UI = {
             </div>
           </div>
         </div>
-        ${product.options && product.options.length > 1 ? `
+        ${product.options && product.options.length > 0 ? `
           <div class="modal-options">
             <h4>옵션 (${product.options.length}개)</h4>
-            <div class="option-list">
-              ${product.options.map((o) => `<span class="option-tag ${o.soldOut ? 'sold-out' : ''}">${o.name || o.optionName}</span>`).join('')}
+            <div class="option-list" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
+              ${product.options.map((o, idx) => {
+    const name = o.name || o.optionName || `옵션${idx + 1}`;
+    const isSoldOut = o.soldOut === true || o.soldOutFlag === 'Y';
+    const badgeStyle = isSoldOut
+      ? 'background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;'
+      : 'background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0;';
+    const label = this._escHtml(name);
+    const gn = String(product.goodsNo || '').replace(/"/g, '&quot;');
+    return `<label style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:20px;font-size:12px;cursor:pointer;margin:2px;${badgeStyle}">
+      <input type="checkbox" class="opt-check" data-goods-no="${gn}" data-opt-idx="${idx}"
+        style="width:14px;height:14px;cursor:pointer;" />
+      ${label}${isSoldOut ? ' (품절)' : ''}
+    </label>`;
+  }).join('')}
+            </div>
+            <div style="margin-top:8px;">
+              <button type="button" class="btn btn-outline btn-sm" onclick="Register.removeSelectedOptions(${JSON.stringify(product.goodsNo)})">선택 옵션 제거</button>
             </div>
           </div>
         ` : ''}

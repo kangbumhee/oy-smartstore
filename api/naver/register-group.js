@@ -3,10 +3,9 @@
  * POST /v2/standard-group-products (비동기)
  */
 const { getAccessToken, getAuthHeadersFromToken, resolveCredentials, resolveToken, proxyFetch, NAVER_API_BASE } = require('../../lib/naver-auth');
-const { getProductNotice, DELIVERY_INFO, AFTER_SERVICE_INFO, ORIGIN_AREA_INFO, CERTIFICATION_EXCLUDE } = require('../../lib/delivery-template');
+const { getProductNotice, DELIVERY_INFO, AFTER_SERVICE_INFO } = require('../../lib/delivery-template');
 
 const GROUP_PRODUCTS_URL = `${NAVER_API_BASE}/v2/standard-group-products`;
-const PURCHASE_OPTIONS_URL = `${NAVER_API_BASE}/v2/products/standard-purchase-options`;
 
 function cleanProductName(rawName) {
   if (!rawName) return rawName;
@@ -25,26 +24,67 @@ function cleanProductName(rawName) {
   return name.replace(/\s{2,}/g, ' ').trim().replace(/^[\s\/]+|[\s\/]+$/g, '').trim() || rawName;
 }
 
-async function fetchGuideId(headers, categoryId) {
-  const url = `${PURCHASE_OPTIONS_URL}?leafCategoryId=${categoryId}`;
-  console.log('[group] Fetching guideId for category:', categoryId);
-  const r = await proxyFetch(url, { headers });
-  if (!r.ok) {
-    const text = await r.text();
-    console.warn('[group] guideId fetch failed:', r.status, text.substring(0, 200));
-    return null;
-  }
-  const data = await r.json();
-  const guides = data.data || data.standardPurchaseOptionGuides || data.guides || [];
+function extractGuidesArray(data) {
+  if (!data || typeof data !== 'object') return [];
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data.content)) return data.content;
+  if (Array.isArray(data.guides)) return data.guides;
+  if (Array.isArray(data.standardPurchaseOptionGuides)) return data.standardPurchaseOptionGuides;
 
-  if (Array.isArray(guides) && guides.length > 0) {
-    const first = guides[0];
-    const id = first.guideId || first.id;
-    console.log('[group] Found guideId:', id, 'from', guides.length, 'guides');
-    return id;
+  const d = data.data;
+  if (Array.isArray(d)) return d;
+  if (d && typeof d === 'object') {
+    if (Array.isArray(d.content)) return d.content;
+    if (Array.isArray(d.guides)) return d.guides;
+    if (Array.isArray(d.standardPurchaseOptionGuides)) return d.standardPurchaseOptionGuides;
+    if (Array.isArray(d.standardPurchaseOptionGuideList)) return d.standardPurchaseOptionGuideList;
   }
-  if (data.guideId) return data.guideId;
-  console.warn('[group] No guideId found in response:', JSON.stringify(data).substring(0, 300));
+  return [];
+}
+
+async function fetchGuideId(headers, categoryId) {
+  const endpoints = [
+    `${NAVER_API_BASE}/v2/product-option-guides?leafCategoryId=${encodeURIComponent(categoryId)}`,
+    `${NAVER_API_BASE}/v2/standard-purchase-option-guides?leafCategoryId=${encodeURIComponent(categoryId)}`,
+    `${NAVER_API_BASE}/v2/products/standard-purchase-options?leafCategoryId=${encodeURIComponent(categoryId)}`,
+  ];
+
+  for (const url of endpoints) {
+    console.log('[group] Trying guideId endpoint:', url);
+    try {
+      const r = await proxyFetch(url, { headers });
+      if (!r.ok) {
+        const text = await r.text();
+        console.warn('[group] endpoint failed:', r.status, url, text.substring(0, 120));
+        continue;
+      }
+      const data = await r.json();
+      const guides = extractGuidesArray(data);
+
+      if (Array.isArray(guides) && guides.length > 0) {
+        const first = guides[0];
+        const id = first.guideId ?? first.id;
+        if (id != null && id !== '') {
+          console.log('[group] Found guideId:', id, 'from:', url);
+          return { guideId: id, guides: first };
+        }
+      }
+      if (data.guideId != null && data.guideId !== '') {
+        console.log('[group] Found direct guideId:', data.guideId);
+        return { guideId: data.guideId, guides: data };
+      }
+      const dg = data.data?.guideId;
+      if (dg != null && dg !== '') {
+        console.log('[group] Found data.guideId:', dg);
+        return { guideId: dg, guides: data.data };
+      }
+      console.warn('[group] No guideId in response from:', url, JSON.stringify(data).substring(0, 220));
+    } catch (e) {
+      console.warn('[group] endpoint error:', url, e.message);
+    }
+  }
+
+  console.warn('[group] All guide endpoints failed for category:', categoryId);
   return null;
 }
 
@@ -62,6 +102,8 @@ module.exports = async function handler(req, res) {
     name, sellingPrice, categoryId, detailHtml,
     uploadedImages = [], options = [], stock = 999,
     brand = '', oliveyoungCategory = '',
+    optionThumbnailUploads = [],
+    sharedOptionalUploads = [],
   } = body;
 
   if (!name || !sellingPrice || !categoryId || !detailHtml) {
@@ -70,7 +112,8 @@ module.exports = async function handler(req, res) {
 
   const allOpts = options || [];
   if (allOpts.length < 2) {
-    return res.status(400).json({
+    return res.status(200).json({
+      success: false,
       error: '그룹상품은 2개 이상의 옵션이 필요합니다.',
       fallbackToNormal: true,
     });
@@ -86,14 +129,15 @@ module.exports = async function handler(req, res) {
     const headers = getAuthHeadersFromToken(token);
     const cleanedName = cleanProductName(name).substring(0, 100);
 
-    const guideId = await fetchGuideId(headers, categoryId);
-    if (!guideId) {
-      return res.status(400).json({
+    const guideResult = await fetchGuideId(headers, categoryId);
+    if (!guideResult) {
+      return res.status(200).json({
         success: false,
-        error: `카테고리(${categoryId})에서 판매 옵션 가이드를 찾을 수 없습니다. 일반등록으로 전환하세요.`,
+        error: `카테고리(${categoryId})에서 판매 옵션 가이드를 찾을 수 없습니다. 이 카테고리는 그룹상품을 지원하지 않을 수 있습니다.`,
         fallbackToNormal: true,
       });
     }
+    const guideId = guideResult.guideId;
 
     const imageBlock = {};
     if (uploadedImages.length > 0 && uploadedImages[0]?.url) {
@@ -108,7 +152,10 @@ module.exports = async function handler(req, res) {
     const optPrices = allOpts.map((o) => parseInt(o.sellingPrice || o.price || 0, 10)).filter((p) => p > 0);
     const basePrices = optPrices.length > 0 ? optPrices : [sellingPrice];
 
-    const specificProducts = allOpts.map((opt) => {
+    const thumbList = Array.isArray(optionThumbnailUploads) ? optionThumbnailUploads : [];
+    const sharedList = Array.isArray(sharedOptionalUploads) ? sharedOptionalUploads : [];
+
+    const specificProducts = allOpts.map((opt, index) => {
       let optName = (opt.name || opt.optionName || '').trim();
       if (optName.length > 50) optName = optName.substring(0, 50);
 
@@ -117,12 +164,31 @@ module.exports = async function handler(req, res) {
       const optStock = Math.max(0, parseInt(opt.stockQuantity ?? opt.quantity ?? 0, 10));
       const isOutOfStock = optStock === 0 || opt.soldOut === true || opt.soldOutFlag === 'Y' || opt.statusType === 'OUTOFSTOCK';
 
+      let imagesPayload;
+      if (thumbList.length > 0) {
+        const rep = thumbList[index] || thumbList[0] || uploadedImages[0];
+        imagesPayload = {};
+        if (rep && rep.url) imagesPayload.representativeImage = rep;
+        if (sharedList.length > 0) {
+          imagesPayload.optionalImages = sharedList.slice(0, 9);
+        }
+        if (!imagesPayload.representativeImage && uploadedImages[0]) {
+          imagesPayload.representativeImage = uploadedImages[0];
+        }
+        if (!imagesPayload.optionalImages && uploadedImages.length > 1 && thumbList.length > 0) {
+          const rest = uploadedImages.filter((u) => !thumbList.some((t) => t.url === u.url));
+          if (rest.length > 0) imagesPayload.optionalImages = rest.slice(0, 9);
+        }
+      } else {
+        imagesPayload = { ...imageBlock };
+      }
+
       return {
         statusType: isOutOfStock ? 'OUTOFSTOCK' : 'SALE',
         saleType: 'NEW',
         salePrice: Math.round(finalPrice),
         stockQuantity: Math.max(0, optStock),
-        images: imageBlock,
+        images: imagesPayload,
         deliveryInfo: DELIVERY_INFO,
         standardPurchaseOptions: [{ valueName: optName }],
       };

@@ -40,6 +40,25 @@ const Register = {
     UI.showToast('대기열에서 제거됨', 'info');
   },
 
+  removeSelectedOptions(goodsNo) {
+    const checkboxes = Array.from(document.querySelectorAll('.opt-check:checked')).filter((cb) => cb.dataset.goodsNo === goodsNo);
+    if (checkboxes.length === 0) {
+      UI.showToast('제거할 옵션을 선택하세요', 'info');
+      return;
+    }
+    const queue = Storage.getQueue();
+    const product = queue.find((p) => p.goodsNo === goodsNo);
+    if (!product || !product.options?.length) return;
+
+    const indices = checkboxes.map((cb) => parseInt(cb.dataset.optIdx, 10)).sort((a, b) => b - a);
+    for (const idx of indices) {
+      if (product.options[idx] !== undefined) product.options.splice(idx, 1);
+    }
+    Storage.updateQueueItem(goodsNo, { options: product.options });
+    this.render();
+    UI.showToast(`${indices.length}개 옵션 제거됨`, 'success');
+  },
+
   startTimer() {
     this._startTime = Date.now();
     const timerEl = document.getElementById('progress-timer');
@@ -208,6 +227,9 @@ const Register = {
         .replace(/\{option\}/g, '');
 
       const imgCount = Math.max(1, Math.min(5, settings.imgCount || 1));
+      const sharedImageCount = Math.max(0, imgCount - 1);
+      const totalThumbnails = opts.length > 1 ? Math.min(opts.length, 5) : 1;
+      const genCount = Math.min(sharedImageCount + totalThumbnails, 8);
 
       const tokenP = API.obtainNaverToken(15);
 
@@ -217,11 +239,14 @@ const Register = {
           productName: product.name,
           brand: product.brand || '',
           category: oyCategory,
-          options: opts.length > 1 ? opts.slice(0, 3) : undefined,
-          count: imgCount,
+          count: genCount,
           prompt: customPrompt || undefined,
           thumbnailPrompt,
           thumbnail: product.thumbnail || undefined,
+          thumbnailCount: totalThumbnails,
+          thumbnailOptions: opts.length > 1
+            ? opts.slice(0, totalThumbnails).map((o) => (o.name || o.optionName || '').trim()).filter(Boolean)
+            : undefined,
         }),
         API.generateDescription({
           name: cleanedBaseName,
@@ -308,12 +333,23 @@ const Register = {
       }
 
       const naverImgUrls = uploadedImages.map((img) => img.url).filter(Boolean);
+      const thumbUploads = uploadedImages.slice(0, totalThumbnails);
+      const sharedUploads = uploadedImages.slice(totalThumbnails, totalThumbnails + sharedImageCount);
+
+      let imgsForDetailTop = naverImgUrls;
+      if (opts.length > 1 && totalThumbnails >= 1) {
+        if (sharedUploads.length > 0) {
+          imgsForDetailTop = sharedUploads.map((u) => u.url).filter(Boolean);
+        } else if (naverImgUrls.length > 0) {
+          imgsForDetailTop = naverImgUrls.slice(0, 1);
+        }
+      }
 
       let detailHtml = descHtml;
 
       if (!detailHtml || detailHtml.length < 100) {
         console.warn('[등록] 상세설명 짧음 → 이미지 + 기본 템플릿');
-        const imgHtml = naverImgUrls.map((u) =>
+        const imgHtml = imgsForDetailTop.map((u) =>
           `<div style="margin:20px 0;text-align:center;"><img src="${this._escHtml(u)}" alt="" style="max-width:100%;height:auto;display:block;margin:0 auto;border-radius:8px;" /></div>`
         ).join('');
         detailHtml = imgHtml + `
@@ -328,10 +364,10 @@ const Register = {
   </section>
 </div>`;
       } else {
-        const imgHtml = naverImgUrls.map((u) =>
+        const imgHtml = imgsForDetailTop.map((u) =>
           `<div style="margin:20px 0;text-align:center;"><img src="${this._escHtml(u)}" alt="" style="max-width:100%;height:auto;display:block;margin:0 auto;border-radius:8px;" /></div>`
         ).join('');
-        if (naverImgUrls[0] && !detailHtml.includes(naverImgUrls[0])) {
+        if (imgsForDetailTop[0] && !detailHtml.includes(imgsForDetailTop[0])) {
           detailHtml = imgHtml + detailHtml;
         }
       }
@@ -386,6 +422,11 @@ const Register = {
         brand: product.brand || '',
         oliveyoungCategory: oyCategory,
       };
+
+      if (useGroupRegister && opts.length > 1 && thumbUploads.length > 0) {
+        regPayload.optionThumbnailUploads = thumbUploads;
+        regPayload.sharedOptionalUploads = sharedUploads;
+      }
 
       let regData;
       if (useGroupRegister) {

@@ -24,6 +24,8 @@ module.exports = async function handler(req, res) {
     prompt: customPrompt,
     thumbnailPrompt: rawThumbnailPrompt,
     thumbnail,
+    thumbnailCount: rawThumbnailCount,
+    thumbnailOptions,
   } = body;
   if (!productName) return res.status(400).json({ error: 'productName 필요' });
 
@@ -43,7 +45,8 @@ module.exports = async function handler(req, res) {
     }
 
     const prompts = [];
-    const numMain = Math.min(parseInt(count, 10) || 1, 5);
+    const numTotal = Math.min(Math.max(1, parseInt(count, 10) || 1), 8);
+    const optNames = Array.isArray(thumbnailOptions) ? thumbnailOptions : [];
 
     const hasRef = !!(referenceImages && referenceImages.length > 0);
 
@@ -51,24 +54,46 @@ module.exports = async function handler(req, res) {
       ? ensureProductContext(customPrompt, productName, brand)
       : buildPrompt(productName, brand, category, null, hasRef);
 
-    const thumbPrompt = rawThumbnailPrompt
+    const baseThumb = rawThumbnailPrompt
       ? ensureProductContext(String(rawThumbnailPrompt), productName, brand)
       : null;
 
-    for (let i = 0; i < numMain; i++) {
-      if (i === 0 && thumbPrompt) {
-        prompts.push(thumbPrompt);
-      } else {
+    const hasThumbCountParam = rawThumbnailCount !== undefined && rawThumbnailCount !== null && String(rawThumbnailCount).trim() !== '';
+
+    if (hasThumbCountParam) {
+      const numThumbs = Math.min(
+        Math.max(1, parseInt(rawThumbnailCount, 10) || 1),
+        numTotal,
+        5
+      );
+      for (let i = 0; i < numThumbs && prompts.length < numTotal; i++) {
+        let p = baseThumb || mainPrompt;
+        if (baseThumb && optNames[i]) {
+          const v = String(optNames[i]).substring(0, 120).replace(/"/g, "'");
+          p = `${baseThumb} The specific variant shown is "${v}".`;
+        }
+        prompts.push(p.substring(0, 2000));
+      }
+      while (prompts.length < numTotal) {
         prompts.push(mainPrompt);
       }
-    }
-
-    if (options && Array.isArray(options) && options.length > 1) {
-      for (const opt of options.slice(0, 2)) {
-        if (opt.soldOut || prompts.length >= 5) continue;
-        const optName = opt.name || opt.optionName || '';
-        if (!optName) continue;
-        prompts.push(buildPrompt(productName, brand, category, optName, hasRef));
+    } else {
+      const numMain = Math.min(numTotal, 5);
+      const thumbPrompt = baseThumb;
+      for (let i = 0; i < numMain; i++) {
+        if (i === 0 && thumbPrompt) {
+          prompts.push(thumbPrompt);
+        } else {
+          prompts.push(mainPrompt);
+        }
+      }
+      if (options && Array.isArray(options) && options.length > 1) {
+        for (const opt of options.slice(0, 2)) {
+          if (opt.soldOut || prompts.length >= 5) continue;
+          const optName = opt.name || opt.optionName || '';
+          if (!optName) continue;
+          prompts.push(buildPrompt(productName, brand, category, optName, hasRef));
+        }
       }
     }
 
