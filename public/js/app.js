@@ -249,22 +249,64 @@ const App = {
 
   async testGoogleConnection() {
     const resultEl = document.getElementById('google-test-result');
-    resultEl.textContent = '테스트 중...';
+    resultEl.textContent = '연결 테스트 중...';
     resultEl.className = 'cred-test-result loading';
     this.saveCredentialsQuietly();
+
     try {
-      const data = await API.generateDescription({
-        name: '테스트 상품', brand: '테스트', price: 10000, category: '스킨케어',
-      });
-      if (data.success) {
-        resultEl.textContent = data.fallback ? '연결 실패 (폴백 사용): ' + (data.error || '').substring(0, 50) : '연결 성공!';
-        resultEl.className = data.fallback ? 'cred-test-result error' : 'cred-test-result success';
-      } else {
-        resultEl.textContent = '실패: ' + (data.error || '').substring(0, 80);
+      const creds = Storage.getCredentials();
+      const settings = Storage.getSettings();
+
+      if (!creds.googleApiKey) {
+        resultEl.textContent = '실패: AI API Key가 설정되지 않았습니다';
         resultEl.className = 'cred-test-result error';
+        return;
+      }
+
+      const baseUrl = (creds.aiBaseUrl || '').replace(/\/+$/, '');
+      const model = settings.geminiModel || 'gemini-3.1-pro-preview';
+
+      if (baseUrl) {
+        const url = `${baseUrl}/chat/completions`;
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), 30000);
+
+        const resp = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${creds.googleApiKey}`,
+          },
+          body: JSON.stringify({
+            model,
+            messages: [{ role: 'user', content: '테스트입니다. "연결 성공"이라고만 답하세요.' }],
+            temperature: 0,
+            max_tokens: 20,
+          }),
+          signal: controller.signal,
+        });
+        clearTimeout(tid);
+
+        if (resp.ok) {
+          const d = await resp.json();
+          const reply = (d.choices?.[0]?.message?.content || '').substring(0, 30);
+          resultEl.textContent = `연결 성공! (모델: ${model}) 응답: "${reply}"`;
+          resultEl.className = 'cred-test-result success';
+        } else {
+          const t = await resp.text().catch(() => '');
+          resultEl.textContent = `실패 (${resp.status}): ${t.substring(0, 100)}`;
+          resultEl.className = 'cred-test-result error';
+        }
+      } else {
+        const data = await API.generateDescription({ name: '테스트', brand: '', price: 10000, category: '' });
+        resultEl.textContent = data.success && !data.fallback
+          ? '연결 성공!'
+          : '실패 (폴백): ' + (data.error || '').substring(0, 80);
+        resultEl.className = data.success && !data.fallback ? 'cred-test-result success' : 'cred-test-result error';
       }
     } catch (e) {
-      resultEl.textContent = '연결 오류: ' + e.message.substring(0, 60);
+      const msg = e.name === 'AbortError' ? '시간 초과 (30초). 서버 상태를 확인하세요.' : e.message.substring(0, 80);
+      resultEl.textContent = '연결 실패: ' + msg;
       resultEl.className = 'cred-test-result error';
     }
   },

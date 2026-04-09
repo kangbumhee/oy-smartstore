@@ -1,4 +1,4 @@
-/* Register Queue Logic with timer + stock popup */
+/* Register Queue Logic — 병렬 최적화 */
 const Register = {
   _timer: null,
   _startTime: 0,
@@ -7,13 +7,11 @@ const Register = {
     const queue = Storage.getQueue();
     const listEl = document.getElementById('register-queue');
     const emptyEl = document.getElementById('register-empty');
-
     if (queue.length === 0) {
       listEl.innerHTML = '';
       emptyEl.style.display = 'block';
       return;
     }
-
     emptyEl.style.display = 'none';
     listEl.innerHTML = queue.map((p) => UI.renderQueueItem(p)).join('');
     UI.updateBadge();
@@ -23,11 +21,9 @@ const Register = {
     marginRate = parseInt(marginRate, 10);
     if (isNaN(marginRate) || marginRate < 5) marginRate = 5;
     if (marginRate > 50) marginRate = 50;
-
     const queue = Storage.getQueue();
     const product = queue.find((p) => p.goodsNo === goodsNo);
     if (!product) return;
-
     Storage.updateQueueItem(goodsNo, { marginRate });
     const calc = Margin.calculate(product.price, marginRate);
     const sellingEl = document.getElementById(`queue-selling-${goodsNo}`);
@@ -59,41 +55,26 @@ const Register = {
   },
 
   _escHtml(s) {
-    return String(s || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/"/g, '&quot;');
+    return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
   },
 
   cleanProductName(rawName) {
     if (!rawName) return rawName;
     let name = rawName;
-
-    const promoPatterns = [
-      /\[[^\]]*올영[^\]]*\]/gi,
-      /\[[^\]]*증정[^\]]*\]/gi,
-      /\[[^\]]*기획[^\]]*\]/gi,
-      /\[[^\]]*에디션[^\]]*\]/gi,
-      /\[[^\]]*PICK[^\]]*\]/gi,
-      /\[[^\]]*공동개발[^\]]*\]/gi,
-      /\[[^\]]*단독[^\]]*\]/gi,
-      /\[[^\]]*한정[^\]]*\]/gi,
-      /\[[^\]]*연속[^\]]*\]/gi,
-      /\[[^\]]*NEW[^\]]*\]/gi,
-      /\[[^\]]*컬러추가[^\]]*\]/gi,
-      /\[[^\]]*본품[^\]]*\]/gi,
+    const patterns = [
+      /\[[^\]]*올영[^\]]*\]/gi, /\[[^\]]*증정[^\]]*\]/gi,
+      /\[[^\]]*기획[^\]]*\]/gi, /\[[^\]]*에디션[^\]]*\]/gi,
+      /\[[^\]]*PICK[^\]]*\]/gi, /\[[^\]]*공동개발[^\]]*\]/gi,
+      /\[[^\]]*단독[^\]]*\]/gi, /\[[^\]]*한정[^\]]*\]/gi,
+      /\[[^\]]*연속[^\]]*\]/gi, /\[[^\]]*NEW[^\]]*\]/gi,
+      /\[[^\]]*컬러추가[^\]]*\]/gi, /\[[^\]]*본품[^\]]*\]/gi,
       /\[\d+\+\d+\]/g,
     ];
-
-    for (const pattern of promoPatterns) {
-      name = name.replace(pattern, '');
-    }
-
+    for (const p of patterns) name = name.replace(p, '');
     name = name.replace(/\(단품[\/]?기획\)/g, '');
     name = name.replace(/\(본품[+][^\)]*\)/g, '');
     name = name.replace(/\s{2,}/g, ' ').trim();
     name = name.replace(/^[\s\/]+|[\s\/]+$/g, '').trim();
-
     return name || rawName;
   },
 
@@ -109,7 +90,7 @@ const Register = {
         </tr>`;
       }).join('');
 
-      const html = `
+      UI.showModal(`
         <h3 style="margin:0 0 12px;">옵션 재고 확인</h3>
         <p style="font-size:13px;color:#666;margin:0 0 12px;">${product.name} — 옵션 ${available.length}개</p>
         <div style="max-height:300px;overflow-y:auto;">
@@ -126,26 +107,17 @@ const Register = {
           <button class="btn btn-outline btn-sm" id="stock-popup-skip">기본값 사용</button>
           <button class="btn btn-primary btn-sm" id="stock-popup-confirm">확인 후 등록</button>
         </div>
-      `;
-
-      UI.showModal(html);
+      `);
 
       document.getElementById('stock-popup-confirm').onclick = () => {
-        const inputs = document.querySelectorAll('.stock-input');
-        inputs.forEach((inp) => {
+        document.querySelectorAll('.stock-input').forEach((inp) => {
           const idx = parseInt(inp.dataset.idx, 10);
-          if (available[idx]) {
-            available[idx].stockQuantity = Math.max(0, parseInt(inp.value, 10) || 0);
-          }
+          if (available[idx]) available[idx].stockQuantity = Math.max(0, parseInt(inp.value, 10) || 0);
         });
         UI.hideModal();
         resolve(opts);
       };
-
-      document.getElementById('stock-popup-skip').onclick = () => {
-        UI.hideModal();
-        resolve(opts);
-      };
+      document.getElementById('stock-popup-skip').onclick = () => { UI.hideModal(); resolve(opts); };
     });
   },
 
@@ -160,42 +132,36 @@ const Register = {
 
     let opts = (product.options || []).filter((o) => !o.soldOut);
     if (opts.length === 0) {
-      const nameHints = product.name || '';
-      const hasOptionHint = /(\d+)\s*(COLOR|컬러|색상|종|타입|TYPE|SET|세트|개입|colors)/i.test(nameHints);
-      if (hasOptionHint && typeof OptionModal !== 'undefined') {
+      const hint = /(\d+)\s*(COLOR|컬러|색상|종|타입|TYPE|SET|세트|개입|colors)/i.test(product.name || '');
+      if (hint && typeof OptionModal !== 'undefined') {
         try {
-          const modalOptions = await OptionModal.open(product);
-          if (modalOptions && modalOptions.length > 0) {
-            product.options = modalOptions;
-            Storage.updateQueueItem(goodsNo, { options: modalOptions });
-            opts = modalOptions.filter((o) => !o.soldOut);
+          const mo = await OptionModal.open(product);
+          if (mo?.length > 0) {
+            product.options = mo;
+            Storage.updateQueueItem(goodsNo, { options: mo });
+            opts = mo.filter((o) => !o.soldOut);
           }
-        } catch { /* user cancelled */ }
+        } catch { /* cancelled */ }
       }
     }
-
-    if (opts.length > 0) {
-      opts = await this.showStockPopup(opts, product);
-    }
+    if (opts.length > 0) opts = await this.showStockPopup(opts, product);
 
     const optCount = opts.length;
-    const steps = [
-      { label: '네이버 토큰 발급 + AI 이미지 생성...', status: 'active' },
-      { label: '카테고리 분류 중...', status: 'pending' },
-      { label: '이미지 업로드 + 상세설명 생성...', status: 'pending' },
-      { label: `스마트스토어 등록 중... ${optCount > 0 ? `(옵션 ${optCount}개)` : ''}`, status: 'pending' },
-    ];
+    const settings = Storage.getSettings();
+    const oyCategory = `${product.category || ''} ${product.subCategory || ''}`.trim();
 
+    const steps = [
+      { label: '① 토큰 + 이미지 + 상세설명 + 카테고리 (병렬)...', status: 'active' },
+      { label: '② 이미지 업로드 중...', status: 'pending' },
+      { label: `③ 스마트스토어 등록 중... ${optCount > 0 ? `(옵션 ${optCount}개)` : ''}`, status: 'pending' },
+    ];
     UI.showProgress(steps);
     this.startTimer();
 
     try {
-      const settings = Storage.getSettings();
-      const oyCategory = `${product.category || ''} ${product.subCategory || ''}`.trim();
+      UI.updateProgressStep(0, 'active', '① 토큰·이미지·설명·카테고리 동시 진행 중...');
 
-      UI.updateProgressStep(0, 'active', '토큰 발급 + AI 이미지 생성 중...');
-
-      const tpl = settings.imgPromptTemplate || 'model_female_elegant';
+      const tpl = settings.imgPromptTemplate || 'studio_white';
       let customPrompt = '';
       if (tpl === 'custom') {
         customPrompt = settings.imgPromptCustom || '';
@@ -208,11 +174,12 @@ const Register = {
           .replace(/\{brand\}/g, product.brand || '')
           .replace(/\{option\}/g, '');
       }
-
       const imgCount = Math.max(1, Math.min(5, settings.imgCount || 1));
 
-      const [tokenResult, imgResult] = await Promise.allSettled([
-        API.obtainNaverToken(15),
+      const tokenP = API.obtainNaverToken(15);
+
+      const [tokenResult, imgResult, descResult, catResult] = await Promise.allSettled([
+        tokenP,
         API.generateProductImages({
           productName: product.name,
           brand: product.brand || '',
@@ -222,6 +189,31 @@ const Register = {
           prompt: customPrompt || undefined,
           thumbnail: product.thumbnail || undefined,
         }),
+        API.generateDescription({
+          name: cleanedBaseName,
+          brand: product.brand,
+          price: calc.sellingPrice,
+          category: oyCategory,
+          options: product.options || [],
+          reviewCount: product.reviewCount || 0,
+          avgRating: product.avgRating || 0,
+          imageUrls: [],
+          geminiModel: settings.geminiModel || undefined,
+        }),
+        (async () => {
+          await tokenP;
+          try {
+            const cat = await API.getBestCategory(oyCategory, product.name);
+            return { id: cat.id || cat.naver_category_id, name: cat.name || cat.naver_category_name };
+          } catch {
+            try {
+              const ai = await API.classifyCategory(product.name, oyCategory);
+              return { id: ai.naver_category_id, name: ai.naver_category_name };
+            } catch {
+              return null;
+            }
+          }
+        })(),
       ]);
 
       if (tokenResult.status === 'rejected' || !tokenResult.value) {
@@ -234,81 +226,56 @@ const Register = {
       if (imgResult.status === 'fulfilled' && imgResult.value?.success && imgResult.value?.images?.length > 0) {
         imageUrls = imgResult.value.images;
       } else {
-        console.warn('AI 이미지 실패, 올리브영 이미지 대체');
+        console.warn('[등록] AI 이미지 실패, 올리브영 이미지 대체');
         try {
           const fb = await API.getProductImages(goodsNo, product.thumbnail);
           imageUrls = (fb.success && fb.images) ? fb.images : [];
         } catch { /* ignore */ }
         if (imageUrls.length === 0 && product.thumbnail) imageUrls.push(product.thumbnail);
       }
-
       if (imageUrls.length === 0) {
-        UI.updateProgressStep(0, 'error', '이미지 없음 - EccoAPI 키를 확인하세요');
+        UI.updateProgressStep(0, 'error', '이미지 없음 — EccoAPI 키를 확인하세요');
         this.stopTimer();
         return;
       }
 
-      const step0Time = ((Date.now() - this._startTime) / 1000).toFixed(1);
-      UI.updateProgressStep(0, 'done', `완료 (${step0Time}초) - 이미지 ${imageUrls.length}장`);
+      let descHtml = '';
+      if (descResult.status === 'fulfilled' && descResult.value?.html && !descResult.value?.fallback) {
+        descHtml = descResult.value.html;
+        console.log('[등록] 상세설명 AI 생성 성공:', descHtml.length, '자');
+      } else {
+        const reason = descResult.status === 'rejected' ? descResult.reason?.message : descResult.value?.error;
+        console.warn('[등록] 상세설명 실패:', reason);
+        descHtml = descResult.value?.html || '';
+      }
 
-      UI.updateProgressStep(1, 'active');
-      let categoryId, categoryName;
-      try {
-        const catData = await API.getBestCategory(oyCategory, product.name);
-        categoryId = catData.id || catData.naver_category_id;
-        categoryName = catData.name || catData.naver_category_name;
-      } catch {
-        try {
-          const aiCat = await API.classifyCategory(product.name, oyCategory);
-          categoryId = aiCat.naver_category_id;
-          categoryName = aiCat.naver_category_name;
-        } catch { /* fallback */ }
+      let categoryId;
+      let categoryName;
+      if (catResult.status === 'fulfilled' && catResult.value?.id) {
+        categoryId = catResult.value.id;
+        categoryName = catResult.value.name;
       }
       if (!categoryId) { categoryId = '50000803'; categoryName = '기타스킨케어 (폴백)'; }
-      UI.updateProgressStep(1, 'done', `카테고리: ${categoryName}`);
 
-      UI.updateProgressStep(2, 'active', `이미지 ${imageUrls.length}장 업로드 중...`);
+      const step0Time = ((Date.now() - this._startTime) / 1000).toFixed(1);
+      UI.updateProgressStep(0, 'done',
+        `① 완료 (${step0Time}초) — 이미지 ${imageUrls.length}장 | 설명 ${descHtml.length > 100 ? 'AI' : '폴백'} | ${categoryName}`);
 
-      let uploadedImages = [];
-      if (imageUrls.length > 0) {
-        const uploadData = await API.uploadImages(imageUrls);
-        uploadedImages = (uploadData.uploaded && uploadData.uploaded.length > 0) ? uploadData.uploaded : [];
-        if (uploadData.errors?.length > 0) console.warn('[등록] 업로드 에러:', uploadData.errors);
-      }
+      UI.updateProgressStep(1, 'active', `② 이미지 ${imageUrls.length}장 업로드 중...`);
+
+      const uploadData = await API.uploadImages(imageUrls);
+      const uploadedImages = (uploadData.uploaded?.length > 0) ? uploadData.uploaded : [];
+      if (uploadData.errors?.length > 0) console.warn('[등록] 업로드 에러:', uploadData.errors);
+
       if (uploadedImages.length === 0) {
-        UI.updateProgressStep(2, 'error', '이미지 업로드 실패');
+        UI.updateProgressStep(1, 'error', '이미지 업로드 실패');
         this.stopTimer();
         return;
       }
 
       const naverImgUrls = uploadedImages.map((img) => img.url).filter(Boolean);
 
-      UI.updateProgressStep(2, 'active', `업로드 완료 ${uploadedImages.length}장 → 상세설명 AI 생성 중...`);
-
-      let detailHtml = '';
-      try {
-        const descResult = await API.generateDescription({
-          name: cleanedBaseName,
-          brand: product.brand,
-          price: calc.sellingPrice,
-          category: oyCategory,
-          options: product.options || [],
-          reviewCount: product.reviewCount || 0,
-          avgRating: product.avgRating || 0,
-          imageUrls: naverImgUrls,
-          geminiModel: settings.geminiModel || undefined,
-        });
-
-        if (descResult?.html && !descResult.fallback) {
-          detailHtml = descResult.html;
-          console.log('[등록] 상세설명 생성 성공:', detailHtml.length, '자');
-        } else {
-          console.warn('[등록] 상세설명 fallback 사용:', descResult?.error);
-          detailHtml = descResult?.html || '';
-        }
-      } catch (e) {
-        console.warn('[등록] 상세설명 생성 실패:', e.message);
-      }
+      let detailHtml = descHtml;
 
       if (!detailHtml || detailHtml.length < 100) {
         console.warn('[등록] 상세설명 짧음 → 이미지 + 기본 템플릿');
@@ -326,16 +293,18 @@ const Register = {
     <p style="font-size:16px;line-height:1.8;color:#333;">올리브영 인기상품 <strong>${this._escHtml(cleanedBaseName)}</strong>을(를) 소개합니다. 올리브영 공식 판매 정품입니다.</p>
   </section>
 </div>`;
-      } else if (naverImgUrls[0] && !detailHtml.includes(naverImgUrls[0])) {
+      } else {
         const imgHtml = naverImgUrls.map((u) =>
           `<div style="margin:20px 0;text-align:center;"><img src="${this._escHtml(u)}" alt="" style="max-width:100%;height:auto;display:block;margin:0 auto;border-radius:8px;" /></div>`
         ).join('');
-        detailHtml = imgHtml + detailHtml;
+        if (naverImgUrls[0] && !detailHtml.includes(naverImgUrls[0])) {
+          detailHtml = imgHtml + detailHtml;
+        }
       }
 
-      UI.updateProgressStep(2, 'done', `이미지 ${uploadedImages.length}장 + 상세설명 완료`);
+      UI.updateProgressStep(1, 'done', `② 업로드 ${uploadedImages.length}장 + 설명 조합 완료`);
 
-      UI.updateProgressStep(3, 'active', opts.length > 0 ? `스마트스토어 등록 중... (옵션 ${opts.length}개)` : '스마트스토어 등록 중...');
+      UI.updateProgressStep(2, 'active', opts.length > 0 ? `③ 등록 중... (옵션 ${opts.length}개)` : '③ 등록 중...');
 
       const prefix = settings.namePrefix || '';
       const suffix = settings.nameSuffix || '';
@@ -374,8 +343,7 @@ const Register = {
       const totalTime = ((Date.now() - this._startTime) / 1000).toFixed(1);
 
       if (regData.success) {
-        UI.updateProgressStep(3, 'done', `스마트스토어 등록 완료! (총 ${totalTime}초)`);
-
+        UI.updateProgressStep(2, 'done', `③ 등록 완료! (총 ${totalTime}초)`);
         Storage.addRegistered({
           goodsNo: product.goodsNo,
           name: cleanedBaseName,
@@ -388,7 +356,6 @@ const Register = {
           categoryName,
           productNo: regData.result?.smartstoreChannelProductNo || regData.result?.originProductNo || '',
         });
-
         Storage.removeFromQueue(goodsNo);
         this._addCloseButton(totalTime, cleanedBaseName, true);
       } else {
@@ -397,9 +364,8 @@ const Register = {
         if (typeof errRaw === 'string') errMsg = errRaw;
         else if (errRaw?.message) errMsg = errRaw.message;
         else errMsg = JSON.stringify(errRaw || '알 수 없는 오류');
-
         console.error('[등록 실패 상세]', errRaw);
-        UI.updateProgressStep(3, 'error', `등록 실패 (${totalTime}초): ${errMsg.substring(0, 100)}`);
+        UI.updateProgressStep(2, 'error', `등록 실패 (${totalTime}초): ${errMsg.substring(0, 100)}`);
         this._addCloseButton(totalTime, product.name, false, errMsg);
       }
     } catch (e) {
@@ -413,20 +379,15 @@ const Register = {
   _addCloseButton(totalTime, productName, success, errMsg) {
     const stepsEl = document.getElementById('progress-steps');
     if (!stepsEl) return;
-
     const msg = success
       ? `<div style="text-align:center;margin:16px 0 8px;color:var(--success);font-weight:600;">등록 완료! (${totalTime}초)</div>`
       : `<div style="text-align:center;margin:16px 0 8px;color:var(--danger);font-weight:600;">등록 실패 (${totalTime}초)</div>`;
-
     stepsEl.insertAdjacentHTML('beforeend', `
       ${msg}
       <div style="text-align:center;margin-top:8px;">
         <button class="btn btn-primary btn-sm" onclick="UI.hideProgress(); Register.render(); Products.render();" style="min-width:120px;">닫기</button>
       </div>
     `);
-
-    if (success) {
-      UI.showToast(`"${productName}" 스마트스토어 등록 완료! (${totalTime}초)`, 'success');
-    }
+    if (success) UI.showToast(`"${productName}" 스마트스토어 등록 완료! (${totalTime}초)`, 'success');
   },
 };
