@@ -264,7 +264,7 @@ const App = {
       }
 
       const baseUrl = (creds.aiBaseUrl || '').replace(/\/+$/, '');
-      const model = settings.geminiModel || 'gemini-3.1-pro-preview';
+      const model = settings.geminiModel || 'claude-sonnet-4-6';
 
       if (baseUrl) {
         const url = `${baseUrl}/chat/completions`;
@@ -323,7 +323,7 @@ const App = {
     document.getElementById('setting-default-stock').value = s.defaultStock || 999;
 
     const modelSelect = document.getElementById('setting-model');
-    const savedModel = s.geminiModel || 'gemini-3.1-pro-preview';
+    const savedModel = s.geminiModel || 'claude-sonnet-4-6';
     let found = false;
     for (const opt of modelSelect.options) {
       if (opt.value === savedModel) { opt.selected = true; found = true; break; }
@@ -394,7 +394,7 @@ const App = {
       smartstoreShippingFee: d.smartstoreShippingFee,
       oliveyoungShippingFee: d.oliveyoungShippingFee,
       shippingProfitBuffer: d.shippingProfitBuffer,
-      geminiModel: 'gemini-3.1-pro-preview',
+      geminiModel: 'claude-sonnet-4-6',
       namePrefix: '', nameSuffix: '', defaultStock: 999, _initialized: true,
     };
     Storage.setSettings(s);
@@ -468,7 +468,7 @@ const App = {
           localSettings.smartstoreShippingFee = s.smartstoreShippingFee;
           localSettings.oliveyoungShippingFee = s.oliveyoungShippingFee;
           localSettings.shippingProfitBuffer = s.shippingProfitBuffer;
-          localSettings.geminiModel = 'gemini-3.1-pro-preview';
+          localSettings.geminiModel = 'claude-sonnet-4-6';
           localSettings.defaultStock = 999;
           localSettings._initialized = true;
           Storage.setSettings(localSettings);
