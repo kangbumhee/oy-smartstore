@@ -3,6 +3,34 @@ const { getDetailAttribute, DELIVERY_INFO } = require('../../lib/delivery-templa
 
 const PRODUCT_URL = `${NAVER_API_BASE}/v2/products`;
 
+/**
+ * 올리브영 프로모션 태그 제거 → 스마트스토어용 상품명
+ */
+function cleanProductName(rawName) {
+  if (!rawName) return rawName;
+  let name = rawName;
+
+  name = name.replace(/\[([^\]]*올영[^\]]*)\]/gi, '');
+  name = name.replace(/\[([^\]]*증정[^\]]*)\]/gi, '');
+  name = name.replace(/\[([^\]]*기획[^\]]*)\]/gi, '');
+  name = name.replace(/\[([^\]]*에디션[^\]]*)\]/gi, '');
+  name = name.replace(/\[([^\]]*PICK[^\]]*)\]/gi, '');
+  name = name.replace(/\[([^\]]*공동개발[^\]]*)\]/gi, '');
+  name = name.replace(/\[([^\]]*단독[^\]]*)\]/gi, '');
+  name = name.replace(/\[([^\]]*한정[^\]]*)\]/gi, '');
+  name = name.replace(/\[([^\]]*연속[^\]]*)\]/gi, '');
+  name = name.replace(/\[([^\]]*NEW[^\]]*)\]/gi, '');
+  name = name.replace(/\[\d+\+\d+\]/g, '');
+
+  name = name.replace(/\(단품[\/]?기획\)/g, '');
+  name = name.replace(/\(본품[+][^\)]*\)/g, '');
+
+  name = name.replace(/\s{2,}/g, ' ').trim();
+  name = name.replace(/^[\s\/]+|[\s\/]+$/g, '').trim();
+
+  return name || rawName;
+}
+
 function buildOptions(oyOptions) {
   if (!oyOptions || oyOptions.length === 0) return null;
   const availableOpts = oyOptions.filter((o) => !o.soldOut);
@@ -62,7 +90,8 @@ module.exports = async function handler(req, res) {
     }
 
     const headers = getAuthHeadersFromToken(token);
-    const detailAttr = getDetailAttribute(oliveyoungCategory, name, brand);
+    const cleanedName = cleanProductName(name).substring(0, 100);
+    const detailAttr = getDetailAttribute(oliveyoungCategory, cleanedName, brand);
     const optionInfo = buildOptions(options);
     const hasOptions = optionInfo && optionInfo.optionCombinations && optionInfo.optionCombinations.length > 0;
 
@@ -103,9 +132,8 @@ module.exports = async function handler(req, res) {
       },
     };
 
-    console.log('[register] options count:', options.length,
-      'hasOptions:', hasOptions,
-      'stockQuantity:', hasOptions ? 0 : stock,
+    console.log('[register] name:', cleanedName, '| options:', options.length,
+      '| hasOptions:', hasOptions, '| stockQuantity:', hasOptions ? 0 : stock,
       hasOptions ? `combinations: ${optionInfo.optionCombinations.length}` : '');
 
     const registerRes = await proxyFetch(PRODUCT_URL, { method: 'POST', headers, body: JSON.stringify(payload) });

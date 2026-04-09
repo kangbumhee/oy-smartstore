@@ -58,6 +58,45 @@ const Register = {
     if (this._timer) { clearInterval(this._timer); this._timer = null; }
   },
 
+  _escHtml(s) {
+    return String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/"/g, '&quot;');
+  },
+
+  cleanProductName(rawName) {
+    if (!rawName) return rawName;
+    let name = rawName;
+
+    const promoPatterns = [
+      /\[[^\]]*올영[^\]]*\]/gi,
+      /\[[^\]]*증정[^\]]*\]/gi,
+      /\[[^\]]*기획[^\]]*\]/gi,
+      /\[[^\]]*에디션[^\]]*\]/gi,
+      /\[[^\]]*PICK[^\]]*\]/gi,
+      /\[[^\]]*공동개발[^\]]*\]/gi,
+      /\[[^\]]*단독[^\]]*\]/gi,
+      /\[[^\]]*한정[^\]]*\]/gi,
+      /\[[^\]]*연속[^\]]*\]/gi,
+      /\[[^\]]*NEW[^\]]*\]/gi,
+      /\[[^\]]*컬러추가[^\]]*\]/gi,
+      /\[[^\]]*본품[^\]]*\]/gi,
+      /\[\d+\+\d+\]/g,
+    ];
+
+    for (const pattern of promoPatterns) {
+      name = name.replace(pattern, '');
+    }
+
+    name = name.replace(/\(단품[\/]?기획\)/g, '');
+    name = name.replace(/\(본품[+][^\)]*\)/g, '');
+    name = name.replace(/\s{2,}/g, ' ').trim();
+    name = name.replace(/^[\s\/]+|[\s\/]+$/g, '').trim();
+
+    return name || rawName;
+  },
+
   showStockPopup(opts, product) {
     return new Promise((resolve) => {
       const available = opts.filter((o) => !o.soldOut);
@@ -117,12 +156,12 @@ const Register = {
 
     const marginRate = product.marginRate || 15;
     const calc = Margin.calculate(product.price, marginRate);
+    const cleanedBaseName = this.cleanProductName(product.name);
 
-    // Re-check options before starting
     let opts = (product.options || []).filter((o) => !o.soldOut);
     if (opts.length === 0) {
       const nameHints = product.name || '';
-      const hasOptionHint = /(\d+)\s*(COLOR|컬러|색상|종|타입|TYPE|SET|세트|개입)/i.test(nameHints);
+      const hasOptionHint = /(\d+)\s*(COLOR|컬러|색상|종|타입|TYPE|SET|세트|개입|colors)/i.test(nameHints);
       if (hasOptionHint && typeof OptionModal !== 'undefined') {
         try {
           const modalOptions = await OptionModal.open(product);
@@ -135,16 +174,15 @@ const Register = {
       }
     }
 
-    // Show stock popup if options exist
     if (opts.length > 0) {
       opts = await this.showStockPopup(opts, product);
     }
 
     const optCount = opts.length;
     const steps = [
-      { label: '네이버 토큰 발급 + AI 이미지 생성 + 상세설명 (병렬)...', status: 'active' },
+      { label: '네이버 토큰 발급 + AI 이미지 생성...', status: 'active' },
       { label: '카테고리 분류 중...', status: 'pending' },
-      { label: '이미지 네이버 업로드 중...', status: 'pending' },
+      { label: '이미지 업로드 + 상세설명 생성...', status: 'pending' },
       { label: `스마트스토어 등록 중... ${optCount > 0 ? `(옵션 ${optCount}개)` : ''}`, status: 'pending' },
     ];
 
@@ -152,11 +190,10 @@ const Register = {
     this.startTimer();
 
     try {
-      // Step 0: PARALLEL - Token + AI Images + AI Description
-      UI.updateProgressStep(0, 'active', '토큰 + AI 이미지 + 상세설명 병렬 생성 중...');
-
       const settings = Storage.getSettings();
       const oyCategory = `${product.category || ''} ${product.subCategory || ''}`.trim();
+
+      UI.updateProgressStep(0, 'active', '토큰 발급 + AI 이미지 생성 중...');
 
       const tpl = settings.imgPromptTemplate || 'model_female_elegant';
       let customPrompt = '';
@@ -174,7 +211,7 @@ const Register = {
 
       const imgCount = Math.max(1, Math.min(5, settings.imgCount || 1));
 
-      const [tokenResult, imgResult, descResult] = await Promise.allSettled([
+      const [tokenResult, imgResult] = await Promise.allSettled([
         API.obtainNaverToken(15),
         API.generateProductImages({
           productName: product.name,
@@ -185,22 +222,14 @@ const Register = {
           prompt: customPrompt || undefined,
           thumbnail: product.thumbnail || undefined,
         }),
-        API.generateDescription({
-          name: product.name, brand: product.brand, price: calc.sellingPrice,
-          category: oyCategory, options: product.options || [],
-          reviewCount: product.reviewCount || 0, avgRating: product.avgRating || 0,
-          imageUrls: [], geminiModel: settings.geminiModel || undefined,
-        }),
       ]);
 
-      // Check token
       if (tokenResult.status === 'rejected' || !tokenResult.value) {
         UI.updateProgressStep(0, 'error', '토큰 발급 실패: ' + (tokenResult.reason?.message || '').substring(0, 80));
         this.stopTimer();
         return;
       }
 
-      // Check images
       let imageUrls = [];
       if (imgResult.status === 'fulfilled' && imgResult.value?.success && imgResult.value?.images?.length > 0) {
         imageUrls = imgResult.value.images;
@@ -213,27 +242,15 @@ const Register = {
         if (imageUrls.length === 0 && product.thumbnail) imageUrls.push(product.thumbnail);
       }
 
-      // Check description (may have failed in parallel — will retry later)
-      let descHtmlBase = '';
-      let descFailed = true;
-      if (descResult.status === 'fulfilled' && descResult.value?.html) {
-        descHtmlBase = descResult.value.html;
-        descFailed = !!descResult.value.fallback;
-      }
-      if (descResult.status === 'rejected') {
-        console.warn('[등록] 병렬 설명 생성 실패:', descResult.reason?.message);
-      }
-
       if (imageUrls.length === 0) {
         UI.updateProgressStep(0, 'error', '이미지 없음 - EccoAPI 키를 확인하세요');
         this.stopTimer();
         return;
       }
 
-      const parallelTime = ((Date.now() - this._startTime) / 1000).toFixed(1);
-      UI.updateProgressStep(0, 'done', `병렬 완료 (${parallelTime}초) - 이미지 ${imageUrls.length}장${descFailed ? ', 설명 재시도 예정' : ', 설명 OK'}`);
+      const step0Time = ((Date.now() - this._startTime) / 1000).toFixed(1);
+      UI.updateProgressStep(0, 'done', `완료 (${step0Time}초) - 이미지 ${imageUrls.length}장`);
 
-      // Step 1: Classify category
       UI.updateProgressStep(1, 'active');
       let categoryId, categoryName;
       try {
@@ -245,13 +262,13 @@ const Register = {
           const aiCat = await API.classifyCategory(product.name, oyCategory);
           categoryId = aiCat.naver_category_id;
           categoryName = aiCat.naver_category_name;
-        } catch { /* fallback below */ }
+        } catch { /* fallback */ }
       }
       if (!categoryId) { categoryId = '50000803'; categoryName = '기타스킨케어 (폴백)'; }
       UI.updateProgressStep(1, 'done', `카테고리: ${categoryName}`);
 
-      // Step 2: Upload images to Naver + embed in description
-      UI.updateProgressStep(2, 'active', `이미지 ${imageUrls.length}장 네이버 업로드 중...`);
+      UI.updateProgressStep(2, 'active', `이미지 ${imageUrls.length}장 업로드 중...`);
+
       let uploadedImages = [];
       if (imageUrls.length > 0) {
         const uploadData = await API.uploadImages(imageUrls);
@@ -263,43 +280,66 @@ const Register = {
         this.stopTimer();
         return;
       }
-      UI.updateProgressStep(2, 'done', `이미지 ${uploadedImages.length}장 업로드 완료`);
 
-      // Embed Naver image URLs into description HTML
-      const naverImgUrls = uploadedImages.map(img => img.url).filter(Boolean);
+      const naverImgUrls = uploadedImages.map((img) => img.url).filter(Boolean);
 
-      // Retry AI description if the parallel attempt failed/fell back
-      if (descFailed) {
-        UI.updateProgressStep(2, 'done', `이미지 ${uploadedImages.length}장 업로드 완료 → 상세설명 재생성 중...`);
-        try {
-          const retryDesc = await API.generateDescription({
-            name: product.name, brand: product.brand, price: calc.sellingPrice,
-            category: oyCategory, options: product.options || [],
-            reviewCount: product.reviewCount || 0, avgRating: product.avgRating || 0,
-            imageUrls: naverImgUrls, geminiModel: settings.geminiModel || undefined,
-          });
-          if (retryDesc?.html && !retryDesc.fallback) {
-            descHtmlBase = retryDesc.html;
-            console.log('[등록] 상세설명 재생성 성공:', descHtmlBase.length, '자');
-          }
-        } catch (e) {
-          console.warn('[등록] 설명 재시도 실패:', e.message);
+      UI.updateProgressStep(2, 'active', `업로드 완료 ${uploadedImages.length}장 → 상세설명 AI 생성 중...`);
+
+      let detailHtml = '';
+      try {
+        const descResult = await API.generateDescription({
+          name: cleanedBaseName,
+          brand: product.brand,
+          price: calc.sellingPrice,
+          category: oyCategory,
+          options: product.options || [],
+          reviewCount: product.reviewCount || 0,
+          avgRating: product.avgRating || 0,
+          imageUrls: naverImgUrls,
+          geminiModel: settings.geminiModel || undefined,
+        });
+
+        if (descResult?.html && !descResult.fallback) {
+          detailHtml = descResult.html;
+          console.log('[등록] 상세설명 생성 성공:', detailHtml.length, '자');
+        } else {
+          console.warn('[등록] 상세설명 fallback 사용:', descResult?.error);
+          detailHtml = descResult?.html || '';
         }
+      } catch (e) {
+        console.warn('[등록] 상세설명 생성 실패:', e.message);
       }
 
-      let detailHtml = descHtmlBase;
-      if (naverImgUrls.length > 0) {
-        const imgHtml = naverImgUrls.map(u =>
-          `<div style="margin:20px 0;text-align:center;"><img src="${u}" alt="" style="max-width:100%;height:auto;display:block;margin:0 auto;border-radius:8px;" /></div>`
+      if (!detailHtml || detailHtml.length < 100) {
+        console.warn('[등록] 상세설명 짧음 → 이미지 + 기본 템플릿');
+        const imgHtml = naverImgUrls.map((u) =>
+          `<div style="margin:20px 0;text-align:center;"><img src="${this._escHtml(u)}" alt="" style="max-width:100%;height:auto;display:block;margin:0 auto;border-radius:8px;" /></div>`
+        ).join('');
+        detailHtml = imgHtml + `
+<div style="max-width:100%;margin:0 auto;font-family:'Noto Sans KR',sans-serif;padding:20px;">
+  <div style="background:linear-gradient(135deg,#FF6B35,#FF8F60);color:#fff;padding:36px 20px;text-align:center;border-radius:16px;margin-bottom:24px;">
+    <h1 style="margin:0;font-size:26px;line-height:1.4;">${this._escHtml(cleanedBaseName)}</h1>
+    <p style="margin:10px 0 0;font-size:18px;opacity:0.9;">${this._escHtml(product.brand || '')}</p>
+  </div>
+  <section style="background:#fff;border-radius:12px;padding:24px;margin-bottom:20px;border:1px solid #eee;">
+    <h2 style="font-size:22px;color:#004E89;margin:0 0 16px;">상품 소개</h2>
+    <p style="font-size:16px;line-height:1.8;color:#333;">올리브영 인기상품 <strong>${this._escHtml(cleanedBaseName)}</strong>을(를) 소개합니다. 올리브영 공식 판매 정품입니다.</p>
+  </section>
+</div>`;
+      } else if (naverImgUrls[0] && !detailHtml.includes(naverImgUrls[0])) {
+        const imgHtml = naverImgUrls.map((u) =>
+          `<div style="margin:20px 0;text-align:center;"><img src="${this._escHtml(u)}" alt="" style="max-width:100%;height:auto;display:block;margin:0 auto;border-radius:8px;" /></div>`
         ).join('');
         detailHtml = imgHtml + detailHtml;
       }
 
-      // Step 3: Register product
+      UI.updateProgressStep(2, 'done', `이미지 ${uploadedImages.length}장 + 상세설명 완료`);
+
       UI.updateProgressStep(3, 'active', opts.length > 0 ? `스마트스토어 등록 중... (옵션 ${opts.length}개)` : '스마트스토어 등록 중...');
+
       const prefix = settings.namePrefix || '';
       const suffix = settings.nameSuffix || '';
-      const registrationName = `${prefix}${prefix ? ' ' : ''}${product.name}${suffix ? ' ' : ''}${suffix}`.trim();
+      const registrationName = `${prefix}${prefix ? ' ' : ''}${cleanedBaseName}${suffix ? ' ' : ''}${suffix}`.trim();
       const defaultStock = settings.defaultStock || 999;
 
       let finalSellingPrice = calc.sellingPrice;
@@ -319,9 +359,15 @@ const Register = {
       }
 
       const regData = await API.registerProduct({
-        name: registrationName, sellingPrice: finalSellingPrice, categoryId, detailHtml,
-        uploadedImages, options: registrationOptions, stock: defaultStock,
-        brand: product.brand || '', oliveyoungCategory: oyCategory,
+        name: registrationName,
+        sellingPrice: finalSellingPrice,
+        categoryId,
+        detailHtml,
+        uploadedImages,
+        options: registrationOptions,
+        stock: defaultStock,
+        brand: product.brand || '',
+        oliveyoungCategory: oyCategory,
       });
 
       this.stopTimer();
@@ -331,16 +377,20 @@ const Register = {
         UI.updateProgressStep(3, 'done', `스마트스토어 등록 완료! (총 ${totalTime}초)`);
 
         Storage.addRegistered({
-          goodsNo: product.goodsNo, name: product.name, brand: product.brand,
-          thumbnail: product.thumbnail, oyPrice: product.price, sellingPrice: calc.sellingPrice,
-          marginRate, categoryId, categoryName,
+          goodsNo: product.goodsNo,
+          name: cleanedBaseName,
+          brand: product.brand,
+          thumbnail: product.thumbnail,
+          oyPrice: product.price,
+          sellingPrice: calc.sellingPrice,
+          marginRate,
+          categoryId,
+          categoryName,
           productNo: regData.result?.smartstoreChannelProductNo || regData.result?.originProductNo || '',
         });
 
         Storage.removeFromQueue(goodsNo);
-
-        // Add close button - user must manually close
-        this._addCloseButton(totalTime, product.name, true);
+        this._addCloseButton(totalTime, cleanedBaseName, true);
       } else {
         const errRaw = regData.error;
         let errMsg;
