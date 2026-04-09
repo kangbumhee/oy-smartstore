@@ -438,10 +438,17 @@ const Register = {
       let regData;
       if (useGroupRegister) {
         console.log('[등록] 그룹상품 등록 시도 (옵션', registrationOptions.length, '개)');
-        regData = await API.registerGroupProduct(regPayload);
+        try {
+          regData = await API.registerGroupProduct(regPayload);
+        } catch (groupErr) {
+          console.warn('[등록] 그룹등록 예외:', groupErr.message);
+          regData = { success: false, fallbackToNormal: true, error: groupErr.message };
+        }
 
-        if (!regData.success && regData.fallbackToNormal) {
-          console.warn('[등록] 그룹등록 실패 → 일반등록 전환:', regData.error || regData.message);
+        if (!regData.success) {
+          const reason = typeof regData.error === 'string' ? regData.error
+            : regData.error?.message || JSON.stringify(regData.error || '알 수 없음');
+          console.warn('[등록] 그룹등록 실패 → 일반등록 전환:', reason);
           UI.updateProgressStep(2, 'active', '③ 그룹등록 실패 → 일반등록으로 전환...');
           regData = await API.registerProduct(regPayload);
         }

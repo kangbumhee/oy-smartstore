@@ -43,7 +43,9 @@ const API = {
     h['Content-Type'] = 'application/json';
     const payload = this._withNaverTokenBody(body, useNaverToken);
     const r = await fetch(url, { method: 'POST', headers: h, body: JSON.stringify(payload) });
-    return r.json();
+    const text = await r.text();
+    try { return JSON.parse(text); }
+    catch { return { success: false, error: text || `HTTP ${r.status}`, status: r.status }; }
   },
 
   async put(url, body, useNaverToken) {

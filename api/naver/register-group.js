@@ -382,7 +382,12 @@ module.exports = async function handler(req, res) {
 
     return res.status(r.status).json({ success: false, error: data, status: r.status });
   } catch (e) {
-    console.error('[group-register] Error:', e.message);
-    return res.status(500).json({ success: false, error: e.message });
+    console.error('[group-register] Error:', e.message, e.stack);
+    return res.status(200).json({
+      success: false,
+      error: e.message,
+      fallbackToNormal: true,
+      message: '그룹등록 서버 에러 → 일반등록으로 전환',
+    });
   }
 };
