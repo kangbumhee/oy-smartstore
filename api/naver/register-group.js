@@ -26,6 +26,8 @@ function cleanProductName(rawName) {
 
 function extractGuidesArray(data) {
   if (!data || typeof data !== 'object') return [];
+  // 공식 그룹상품 가이드 응답: { useOptionYn, optionGuides: [{ guideId, standardPurchaseOptions }] }
+  if (Array.isArray(data.optionGuides)) return data.optionGuides;
   if (Array.isArray(data)) return data;
   if (Array.isArray(data.content)) return data.content;
   if (Array.isArray(data.guides)) return data.guides;
@@ -34,6 +36,7 @@ function extractGuidesArray(data) {
   const d = data.data;
   if (Array.isArray(d)) return d;
   if (d && typeof d === 'object') {
+    if (Array.isArray(d.optionGuides)) return d.optionGuides;
     if (Array.isArray(d.content)) return d.content;
     if (Array.isArray(d.guides)) return d.guides;
     if (Array.isArray(d.standardPurchaseOptionGuides)) return d.standardPurchaseOptionGuides;
@@ -43,25 +46,30 @@ function extractGuidesArray(data) {
 }
 
 async function fetchGuideId(headers, categoryId) {
-  const enc = encodeURIComponent(categoryId);
-  const endpoints = [
-    `${NAVER_API_BASE}/v2/product-option-guides?leafCategoryId=${enc}`,
-    `${NAVER_API_BASE}/v2/standard-purchase-option-guides?leafCategoryId=${enc}`,
-    `${NAVER_API_BASE}/v2/categories/${enc}/product-option-guides`,
-    `${NAVER_API_BASE}/v2/categories/${enc}/standard-purchase-option-guides`,
-    `${NAVER_API_BASE}/v2/products/standard-purchase-options?leafCategoryId=${enc}`,
+  const enc = encodeURIComponent(String(categoryId).trim());
+  // 공식: GET /v2/standard-purchase-option-guides?categoryId= (leafCategoryId 는 400 BAD_REQUEST)
+  const urls = [
+    `${NAVER_API_BASE}/v2/standard-purchase-option-guides?categoryId=${enc}`,
   ];
+  const h = {
+    ...headers,
+    Accept: 'application/json;charset=UTF-8',
+  };
 
-  for (const url of endpoints) {
+  for (const url of urls) {
     console.log('[group] Trying guideId endpoint:', url);
     try {
-      const r = await proxyFetch(url, { headers });
+      const r = await proxyFetch(url, { headers: h });
       if (!r.ok) {
         const text = await r.text();
         console.warn('[group] endpoint failed:', r.status, url, text.substring(0, 120));
         continue;
       }
       const data = await r.json();
+      if (data && typeof data === 'object' && data.useOptionYn === false) {
+        console.warn('[group] useOptionYn=false (그룹 판매옵션 미지원):', categoryId);
+        return null;
+      }
       const guides = extractGuidesArray(data);
 
       if (Array.isArray(guides) && guides.length > 0) {
