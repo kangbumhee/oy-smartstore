@@ -91,20 +91,33 @@ async function fetchOptionGuide(headers, categoryId) {
 }
 
 /**
- * 올리브영 옵션명(예: "1호 라이트베이지")을 네이버 판매옵션 구조에 매핑.
- * 가이드에 optionId가 1개면 그 optionId + 옵션명을 valueName으로 사용.
- * 가이드에 optionId가 2개 이상이면 첫 번째 optionId에 옵션명 배정.
+ * 올리브영 옵션명을 네이버 판매옵션 구조에 매핑.
+ * 가이드의 모든 optionId에 대해 valueName을 채워야 함.
+ * 첫 번째 optionId에 올리브영 옵션명을 넣고, 나머지 optionId에는 기본값("1개" 등)을 넣음.
  */
 function buildStandardPurchaseOptions(optName, stdOptions) {
   if (!stdOptions || stdOptions.length === 0) {
     return [{ valueName: optName }];
   }
 
-  if (stdOptions.length === 1) {
-    return [{ optionId: stdOptions[0].optionId, valueName: optName }];
-  }
+  return stdOptions.map((spo, idx) => {
+    if (idx === 0) {
+      return { optionId: spo.optionId, valueName: optName };
+    }
+    const defaults = pickDefaultValue(spo);
+    return { optionId: spo.optionId, valueName: defaults };
+  });
+}
 
-  return [{ optionId: stdOptions[0].optionId, valueName: optName }];
+function pickDefaultValue(spo) {
+  const values = spo.optionValues || [];
+  if (values.length > 0) return values[0].valueName;
+  const units = spo.optionUsableUnits || [];
+  if (units.length > 0) return '1' + units[0].unit;
+  const name = (spo.optionName || '').toLowerCase();
+  if (name.includes('수량') || name.includes('개수')) return '1개';
+  if (name.includes('용량')) return '1개';
+  return '1개';
 }
 
 module.exports = async function handler(req, res) {
@@ -269,6 +282,11 @@ module.exports = async function handler(req, res) {
         error: data,
         fallbackToNormal: true,
         message: '그룹등록 실패 → 일반등록으로 전환',
+        debug: {
+          guideId,
+          stdOptionIds: stdOptions.map((o) => ({ id: o.optionId, name: o.optionName })),
+          samplePayloadOpt: specificProducts[0]?.standardPurchaseOptions,
+        },
       });
     }
 
