@@ -332,16 +332,34 @@ module.exports = async function handler(req, res) {
             message: '그룹등록 비동기 처리 실패',
           });
         }
-        console.log('[group-register] Poll timeout, returning QUEUED with requestId');
+        console.warn('[group-register] Poll timeout — QUEUED never became COMPLETED, falling back');
+        return res.status(200).json({
+          success: false,
+          fallbackToNormal: true,
+          error: '그룹상품 비동기 처리 시간 초과 (QUEUED → COMPLETED 전환 실패). 일반등록으로 전환합니다.',
+          requestId: reqId,
+          state: 'QUEUED_TIMEOUT',
+        });
       }
 
+      if (state === 'COMPLETED') {
+        return res.status(200).json({
+          success: true,
+          isGroup: true,
+          result: data,
+          groupProductNo: data.groupProductNo || progress.groupProductNo || null,
+          requestId: reqId,
+          productNos: data.productNos || progress.productNos || [],
+          state: 'COMPLETED',
+        });
+      }
+
+      console.warn('[group-register] Unexpected state:', state, '— falling back');
       return res.status(200).json({
-        success: true,
-        isGroup: true,
-        result: data,
-        groupProductNo: data.groupProductNo || progress.groupProductNo || null,
+        success: false,
+        fallbackToNormal: true,
+        error: `그룹상품 예상치 못한 상태: ${state}. 일반등록으로 전환합니다.`,
         requestId: reqId,
-        productNos: data.productNos || progress.productNos || [],
         state,
       });
     }
