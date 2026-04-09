@@ -50,6 +50,20 @@ const Storage = {
     this.set(this.KEYS.REGISTERED, list);
   },
 
+  removeRegistered(productNo) {
+    const list = this.getRegistered().filter((p) => (p.productNo || p.naverProductNo) !== productNo);
+    this.set(this.KEYS.REGISTERED, list);
+  },
+
+  updateRegistered(productNo, updates) {
+    const list = this.getRegistered();
+    const idx = list.findIndex((p) => (p.productNo || p.naverProductNo) === productNo);
+    if (idx >= 0) {
+      list[idx] = { ...list[idx], ...updates };
+      this.set(this.KEYS.REGISTERED, list);
+    }
+  },
+
   getSettings() {
     return this.get(this.KEYS.SETTINGS, {
       marginRate: 15,

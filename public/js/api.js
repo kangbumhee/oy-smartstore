@@ -44,6 +44,19 @@ const API = {
     return r.json();
   },
 
+  async patch(url, body, useNaverToken) {
+    const h = useNaverToken ? this._naverHeaders() : this._credHeaders();
+    h['Content-Type'] = 'application/json';
+    const r = await fetch(url, { method: 'PATCH', headers: h, body: JSON.stringify(body) });
+    return r.json();
+  },
+
+  async delete(url, useNaverToken) {
+    const h = useNaverToken ? this._naverHeaders() : this._credHeaders();
+    const r = await fetch(url, { method: 'DELETE', headers: h });
+    return r.json();
+  },
+
   async obtainNaverToken(maxRetries = 15) {
     if (this._naverToken && Date.now() < this._tokenExpiry - 60000) {
       return this._naverToken;
@@ -89,7 +102,10 @@ const API = {
     return this.get(`/api/naver/categories?mode=best-match&oyCategory=${encodeURIComponent(oyCategory)}&productName=${encodeURIComponent(productName)}`, true);
   },
   async getNaverProducts(page = 1) { return this.get(`/api/naver/products?page=${page}`, true); },
+  async getNaverProductDetail(productNo) { return this.get(`/api/naver/products?productNo=${encodeURIComponent(productNo)}`, true); },
   async updateNaverProduct(data) { return this.put('/api/naver/products', data, true); },
+  async syncOptionStock(data) { return this.patch('/api/naver/products', data, true); },
+  async deleteNaverProduct(productNo) { return this.delete(`/api/naver/products?productNo=${encodeURIComponent(productNo)}`, true); },
 
   // Image - AI product image generation (나노바나나/Gemini)
   async generateProductImages(productInfo) {
