@@ -1,11 +1,14 @@
 /**
  * 그룹상품 등록 API — 옵션별 개별 상품 페이지 자동 생성
  * POST /v2/standard-group-products (비동기)
+ *
+ * 공식 가이드: https://github.com/commerce-api-naver/commerce-api/wiki/커머스API-그룹상품-연동-가이드
  */
 const { getAccessToken, getAuthHeadersFromToken, resolveCredentials, resolveToken, proxyFetch, NAVER_API_BASE } = require('../../lib/naver-auth');
-const { getProductNotice, DELIVERY_INFO, AFTER_SERVICE_INFO } = require('../../lib/delivery-template');
+const { getProductNotice, DELIVERY_INFO, AFTER_SERVICE_INFO, ORIGIN_AREA_INFO } = require('../../lib/delivery-template');
 
 const GROUP_PRODUCTS_URL = `${NAVER_API_BASE}/v2/standard-group-products`;
+const GUIDE_URL = `${NAVER_API_BASE}/v2/standard-purchase-option-guides`;
 
 function cleanProductName(rawName) {
   if (!rawName) return rawName;
@@ -24,83 +27,84 @@ function cleanProductName(rawName) {
   return name.replace(/\s{2,}/g, ' ').trim().replace(/^[\s\/]+|[\s\/]+$/g, '').trim() || rawName;
 }
 
-function extractGuidesArray(data) {
-  if (!data || typeof data !== 'object') return [];
-  // 공식 그룹상품 가이드 응답: { useOptionYn, optionGuides: [{ guideId, standardPurchaseOptions }] }
-  if (Array.isArray(data.optionGuides)) return data.optionGuides;
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data.content)) return data.content;
-  if (Array.isArray(data.guides)) return data.guides;
-  if (Array.isArray(data.standardPurchaseOptionGuides)) return data.standardPurchaseOptionGuides;
+/**
+ * GET /v2/standard-purchase-option-guides?categoryId=...
+ * 공식 응답:
+ * {
+ *   "useOptionYn": true,
+ *   "optionGuides": [{
+ *     "guideId": 21,
+ *     "standardPurchaseOptions": [{
+ *       "optionId": 51,
+ *       "optionName": "용량",
+ *       "optionValues": [{ "valueName": "250ml" }, ...]
+ *     }, ...]
+ *   }, ...]
+ * }
+ */
+async function fetchOptionGuide(headers, categoryId) {
+  const url = `${GUIDE_URL}?categoryId=${encodeURIComponent(String(categoryId).trim())}`;
+  console.log('[group] fetchOptionGuide:', url);
 
-  const d = data.data;
-  if (Array.isArray(d)) return d;
-  if (d && typeof d === 'object') {
-    if (Array.isArray(d.optionGuides)) return d.optionGuides;
-    if (Array.isArray(d.content)) return d.content;
-    if (Array.isArray(d.guides)) return d.guides;
-    if (Array.isArray(d.standardPurchaseOptionGuides)) return d.standardPurchaseOptionGuides;
-    if (Array.isArray(d.standardPurchaseOptionGuideList)) return d.standardPurchaseOptionGuideList;
+  try {
+    const r = await proxyFetch(url, {
+      headers: { ...headers, Accept: 'application/json;charset=UTF-8' },
+    });
+
+    if (!r.ok) {
+      const text = await r.text();
+      console.warn('[group] guide API failed:', r.status, text.substring(0, 200));
+      return { supported: false, reason: `API ${r.status}: ${text.substring(0, 100)}` };
+    }
+
+    const data = await r.json();
+
+    if (data.useOptionYn === false) {
+      return { supported: false, reason: '이 카테고리는 그룹 판매옵션을 지원하지 않습니다 (useOptionYn=false)' };
+    }
+
+    const guides = data.optionGuides || data.guides || [];
+    if (!Array.isArray(guides) || guides.length === 0) {
+      return { supported: false, reason: '판매옵션 가이드가 비어있습니다' };
+    }
+
+    const first = guides[0];
+    const guideId = first.guideId ?? first.id;
+    if (guideId == null) {
+      return { supported: false, reason: 'guideId를 찾을 수 없습니다' };
+    }
+
+    const stdOptions = first.standardPurchaseOptions || [];
+    console.log('[group] Found guideId:', guideId,
+      '| options:', stdOptions.map((o) => `${o.optionName}(id=${o.optionId})`).join(', '));
+
+    return {
+      supported: true,
+      guideId,
+      standardPurchaseOptions: stdOptions,
+      allGuides: guides,
+    };
+  } catch (e) {
+    console.warn('[group] fetchOptionGuide error:', e.message);
+    return { supported: false, reason: e.message };
   }
-  return [];
 }
 
-async function fetchGuideId(headers, categoryId) {
-  const enc = encodeURIComponent(String(categoryId).trim());
-  // 공식: GET /v2/standard-purchase-option-guides?categoryId= (leafCategoryId 는 400 BAD_REQUEST)
-  const urls = [
-    `${NAVER_API_BASE}/v2/standard-purchase-option-guides?categoryId=${enc}`,
-  ];
-  const h = {
-    ...headers,
-    Accept: 'application/json;charset=UTF-8',
-  };
-
-  for (const url of urls) {
-    console.log('[group] Trying guideId endpoint:', url);
-    try {
-      const r = await proxyFetch(url, { headers: h });
-      if (!r.ok) {
-        const text = await r.text();
-        console.warn('[group] endpoint failed:', r.status, url, text.substring(0, 120));
-        continue;
-      }
-      const data = await r.json();
-      if (data && typeof data === 'object' && data.useOptionYn === false) {
-        console.warn('[group] useOptionYn=false (그룹 판매옵션 미지원):', categoryId);
-        return null;
-      }
-      const guides = extractGuidesArray(data);
-
-      if (Array.isArray(guides) && guides.length > 0) {
-        const first = guides[0];
-        const id =
-          first.guideId ??
-          first.id ??
-          first.standardPurchaseOptionGuideNo ??
-          first.standardPurchaseOptionGuideId;
-        if (id != null && id !== '') {
-          console.log('[group] Found guideId:', id, 'from:', url);
-          return { guideId: id, guides: first };
-        }
-      }
-      if (data.guideId != null && data.guideId !== '') {
-        console.log('[group] Found direct guideId:', data.guideId);
-        return { guideId: data.guideId, guides: data };
-      }
-      const dg = data.data?.guideId;
-      if (dg != null && dg !== '') {
-        console.log('[group] Found data.guideId:', dg);
-        return { guideId: dg, guides: data.data };
-      }
-      console.warn('[group] No guideId in response from:', url, JSON.stringify(data).substring(0, 220));
-    } catch (e) {
-      console.warn('[group] endpoint error:', url, e.message);
-    }
+/**
+ * 올리브영 옵션명(예: "1호 라이트베이지")을 네이버 판매옵션 구조에 매핑.
+ * 가이드에 optionId가 1개면 그 optionId + 옵션명을 valueName으로 사용.
+ * 가이드에 optionId가 2개 이상이면 첫 번째 optionId에 옵션명 배정.
+ */
+function buildStandardPurchaseOptions(optName, stdOptions) {
+  if (!stdOptions || stdOptions.length === 0) {
+    return [{ valueName: optName }];
   }
 
-  console.warn('[group] All guide endpoints failed for category:', categoryId);
-  return null;
+  if (stdOptions.length === 1) {
+    return [{ optionId: stdOptions[0].optionId, valueName: optName }];
+  }
+
+  return [{ optionId: stdOptions[0].optionId, valueName: optName }];
 }
 
 module.exports = async function handler(req, res) {
@@ -144,15 +148,16 @@ module.exports = async function handler(req, res) {
     const headers = getAuthHeadersFromToken(token);
     const cleanedName = cleanProductName(name).substring(0, 100);
 
-    const guideResult = await fetchGuideId(headers, categoryId);
-    if (!guideResult) {
+    const guide = await fetchOptionGuide(headers, categoryId);
+    if (!guide.supported) {
       return res.status(200).json({
         success: false,
-        error: `카테고리(${categoryId})에서 판매 옵션 가이드를 찾을 수 없습니다. 이 카테고리는 그룹상품을 지원하지 않을 수 있습니다.`,
+        error: `카테고리(${categoryId}) 그룹상품 미지원: ${guide.reason}`,
         fallbackToNormal: true,
       });
     }
-    const guideId = guideResult.guideId;
+
+    const { guideId, standardPurchaseOptions: stdOptions } = guide;
 
     const imageBlock = {};
     if (uploadedImages.length > 0 && uploadedImages[0]?.url) {
@@ -163,9 +168,6 @@ module.exports = async function handler(req, res) {
     }
 
     const productNotice = getProductNotice(oliveyoungCategory, cleanedName, brand);
-
-    const optPrices = allOpts.map((o) => parseInt(o.sellingPrice || o.price || 0, 10)).filter((p) => p > 0);
-    const basePrices = optPrices.length > 0 ? optPrices : [sellingPrice];
 
     const thumbList = Array.isArray(optionThumbnailUploads) ? optionThumbnailUploads : [];
     const sharedList = Array.isArray(sharedOptionalUploads) ? sharedOptionalUploads : [];
@@ -200,12 +202,16 @@ module.exports = async function handler(req, res) {
 
       return {
         statusType: isOutOfStock ? 'OUTOFSTOCK' : 'SALE',
-        saleType: 'NEW',
         salePrice: Math.round(finalPrice),
         stockQuantity: Math.max(0, optStock),
         images: imagesPayload,
         deliveryInfo: DELIVERY_INFO,
-        standardPurchaseOptions: [{ valueName: optName }],
+        originAreaInfo: ORIGIN_AREA_INFO,
+        standardPurchaseOptions: buildStandardPurchaseOptions(optName, stdOptions),
+        smartstoreChannelProduct: {
+          naverShoppingRegistration: true,
+          channelProductDisplayStatusType: 'ON',
+        },
       };
     });
 
@@ -215,7 +221,6 @@ module.exports = async function handler(req, res) {
         name: cleanedName,
         guideId,
         brandName: brand || undefined,
-        saleType: 'NEW',
         taxType: 'TAX',
         minorPurchasable: true,
         productInfoProvidedNotice: productNotice,
@@ -232,7 +237,7 @@ module.exports = async function handler(req, res) {
     console.log('[group-register] name:', cleanedName,
       '| options:', allOpts.length,
       '| guideId:', guideId,
-      '| prices:', basePrices.slice(0, 3).join(','));
+      '| stdOptions:', stdOptions.map((o) => `${o.optionName}(${o.optionId})`).join(','));
 
     const r = await proxyFetch(GROUP_PRODUCTS_URL, {
       method: 'POST',
