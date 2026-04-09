@@ -15,7 +15,16 @@ module.exports = async function handler(req, res) {
   let body;
   try { body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body; } catch { body = {}; }
 
-  const { productName, brand, category, options, count = 1, prompt: customPrompt, thumbnail } = body;
+  const {
+    productName,
+    brand,
+    category,
+    options,
+    count = 1,
+    prompt: customPrompt,
+    thumbnailPrompt: rawThumbnailPrompt,
+    thumbnail,
+  } = body;
   if (!productName) return res.status(400).json({ error: 'productName 필요' });
 
   const eccoKey = resolveEccoKey(req);
@@ -31,8 +40,16 @@ module.exports = async function handler(req, res) {
       ? ensureProductContext(customPrompt, productName, brand, thumbnail)
       : buildPrompt(productName, brand, category, null, thumbnail);
 
+    const thumbPrompt = rawThumbnailPrompt
+      ? ensureProductContext(String(rawThumbnailPrompt), productName, brand, thumbnail)
+      : null;
+
     for (let i = 0; i < numMain; i++) {
-      prompts.push(mainPrompt);
+      if (i === 0 && thumbPrompt) {
+        prompts.push(thumbPrompt);
+      } else {
+        prompts.push(mainPrompt);
+      }
     }
 
     if (options && Array.isArray(options) && options.length > 1) {

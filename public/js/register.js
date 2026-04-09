@@ -159,11 +159,15 @@ const Register = {
       UI.updateProgressStep(0, 'active', '① 토큰·이미지·설명·카테고리 동시 진행 중...');
 
       const tpl = settings.imgPromptTemplate || 'studio_white';
+      let tplForDetail = tpl;
+      if (tpl === 'thumbnail_closeup' || tpl === 'thumbnail_closeup_male') {
+        tplForDetail = 'studio_white';
+      }
       let customPrompt = '';
-      if (tpl === 'custom') {
+      if (tplForDetail === 'custom') {
         customPrompt = settings.imgPromptCustom || '';
-      } else if (App.PROMPT_TEMPLATES && App.PROMPT_TEMPLATES[tpl]) {
-        customPrompt = App.PROMPT_TEMPLATES[tpl];
+      } else if (App.PROMPT_TEMPLATES && App.PROMPT_TEMPLATES[tplForDetail]) {
+        customPrompt = App.PROMPT_TEMPLATES[tplForDetail];
       }
       if (customPrompt) {
         customPrompt = customPrompt
@@ -171,6 +175,14 @@ const Register = {
           .replace(/\{brand\}/g, product.brand || '')
           .replace(/\{option\}/g, '');
       }
+
+      const thumbnailTpl = String(tpl || '').includes('male') ? 'thumbnail_closeup_male' : 'thumbnail_closeup';
+      let thumbnailPrompt = App.PROMPT_TEMPLATES[thumbnailTpl] || App.PROMPT_TEMPLATES.thumbnail_closeup;
+      thumbnailPrompt = thumbnailPrompt
+        .replace(/\{product\}/g, product.name || '')
+        .replace(/\{brand\}/g, product.brand || '')
+        .replace(/\{option\}/g, '');
+
       const imgCount = Math.max(1, Math.min(5, settings.imgCount || 1));
 
       const tokenP = API.obtainNaverToken(15);
@@ -184,6 +196,7 @@ const Register = {
           options: opts.length > 1 ? opts.slice(0, 3) : undefined,
           count: imgCount,
           prompt: customPrompt || undefined,
+          thumbnailPrompt,
           thumbnail: product.thumbnail || undefined,
         }),
         API.generateDescription({
