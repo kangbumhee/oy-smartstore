@@ -28,7 +28,10 @@ const Products = {
         <span class="products-count">총 ${list.length}개 상품</span>
         <div class="products-toolbar-actions">
           <button type="button" class="btn btn-primary btn-sm" onclick="Products.syncAll()" id="sync-all-btn">
-            전체 재고 동기화
+            🔄 전체 재고 동기화
+          </button>
+          <button type="button" class="btn btn-danger btn-sm" onclick="Products.removeAll()" id="remove-all-btn">
+            🗑 전체 목록 삭제
           </button>
         </div>
       </div>
@@ -67,8 +70,9 @@ const Products = {
           </div>
           <div class="registered-item-actions">
             ${storeUrl ? `<a class="btn btn-outline btn-xs" href="${storeUrl}" target="_blank" rel="noopener" onclick="event.stopPropagation()">스토어 보기 ↗</a>` : ''}
-            ${productNo && goodsNo ? `<button type="button" class="btn btn-primary btn-xs oy-btn-sync" data-product-no="${pnAttr}" data-goods-no="${gAttr}">재고 동기화</button>` : ''}
-            ${productNo ? `<button type="button" class="btn btn-danger btn-xs oy-btn-delete" data-product-no="${pnAttr}">삭제</button>` : ''}
+            ${productNo && goodsNo ? `<button type="button" class="btn btn-primary btn-xs oy-btn-sync" data-product-no="${pnAttr}" data-goods-no="${gAttr}">🔄 재고 동기화</button>` : ''}
+            ${productNo ? `<button type="button" class="btn btn-danger btn-xs oy-btn-delete" data-product-no="${pnAttr}" title="네이버 판매중지 + 목록 제거">🗑 삭제</button>` : ''}
+            <button type="button" class="btn btn-outline btn-xs oy-btn-remove" data-product-no="${pnAttr}" data-goods-no="${gAttr}" title="목록에서만 제거 (네이버 상태 유지)">✕ 목록 제거</button>
           </div>
         </div>
       </div>
@@ -91,15 +95,58 @@ const Products = {
       if (delEl) {
         const pn = delEl.getAttribute('data-product-no') || '';
         if (pn) this.deleteProduct(pn);
+        return;
+      }
+      const removeEl = e.target.closest('.oy-btn-remove');
+      if (removeEl) {
+        const pn = removeEl.getAttribute('data-product-no') || '';
+        const gn = removeEl.getAttribute('data-goods-no') || '';
+        if (pn) this.removeFromList(pn);
+        else if (gn) this.removeFromListByGoodsNo(gn);
+        return;
       }
     });
+  },
+
+  removeFromList(productNo) {
+    if (!productNo) return;
+    const row = Storage.getRegistered().find((p) => (p.productNo || p.naverProductNo) === productNo);
+    const label = (row?.name || productNo).substring(0, 40);
+    if (!confirm(`"${label}..." 을(를) 목록에서 제거하시겠습니까?\n\n※ 네이버 스마트스토어에서는 삭제되지 않습니다.\n   (스토어 상품은 그대로 유지됩니다)`)) return;
+
+    Storage.removeRegistered(productNo);
+    this.render();
+    UI.showToast('목록에서 제거됨', 'info');
+  },
+
+  removeFromListByGoodsNo(goodsNo) {
+    if (!goodsNo) return;
+    const row = Storage.getRegistered().find((p) => p.goodsNo === goodsNo);
+    const label = (row?.name || goodsNo).substring(0, 40);
+    if (!confirm(`"${label}..." 을(를) 목록에서 제거하시겠습니까?\n\n※ 네이버 스마트스토어에서는 삭제되지 않습니다.`)) return;
+
+    const next = Storage.getRegistered().filter((p) => p.goodsNo !== goodsNo);
+    Storage.set(Storage.KEYS.REGISTERED, next);
+    this.render();
+    UI.showToast('목록에서 제거됨', 'info');
+  },
+
+  removeAll() {
+    const list = Storage.getRegistered();
+    if (list.length === 0) return UI.showToast('삭제할 상품이 없습니다', 'info');
+
+    if (!confirm(`등록된 상품 ${list.length}개를 모두 목록에서 제거하시겠습니까?\n\n※ 네이버 스마트스토어 상품은 삭제되지 않습니다.\n   (스토어 상품은 그대로 유지됩니다)`)) return;
+
+    Storage.set(Storage.KEYS.REGISTERED, []);
+    this.render();
+    UI.showToast(`${list.length}개 상품 목록에서 제거됨`, 'success');
   },
 
   async deleteProduct(productNo) {
     if (!productNo) return;
     const row = Storage.getRegistered().find((p) => (p.productNo || p.naverProductNo) === productNo);
-    const label = row?.name || productNo;
-    if (!confirm(`"${label}" 상품을 삭제하시겠습니까?\n\n네이버 스마트스토어에서 판매중지 처리되고,\n등록 목록에서 제거됩니다.`)) return;
+    const label = (row?.name || productNo).substring(0, 40);
+    if (!confirm(`"${label}..." 상품을 삭제하시겠습니까?\n\n• 네이버 스마트스토어에서 판매중지 처리\n• 등록 목록에서 제거`)) return;
 
     UI.showToast('상품 삭제 중...', 'info', 2000);
 
@@ -133,7 +180,7 @@ const Products = {
     }
 
     const btn = document.querySelector(`.oy-btn-sync[data-product-no="${CSS.escape(productNo)}"]`);
-    if (btn) { btn.disabled = true; btn.textContent = '동기화 중...'; }
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ 동기화 중...'; }
 
     try {
       await API.obtainNaverToken();
@@ -148,7 +195,7 @@ const Products = {
       const naverCombos = optInfo.optionCombinations || [];
 
       if (naverCombos.length === 0) {
-        UI.showToast(`${productNo}: 옵션 없는 상품 — 재고 동기화 불필요`, 'info');
+        UI.showToast('옵션 없는 상품 — 재고 동기화 불필요', 'info');
         Storage.updateRegistered(productNo, { lastSyncAt: Date.now(), syncedOptions: [] });
         this.render();
         return true;
@@ -166,7 +213,7 @@ const Products = {
         try {
           oyOptions = await this._fetchOptionsViaExtension(goodsNo);
         } catch {
-          UI.showToast('올리브영 옵션 가져오기 실패 — 크롬 확장 또는 수동 확인', 'error');
+          UI.showToast('올리브영 옵션 가져오기 실패 — 크롬 확장 확인', 'error');
           return false;
         }
       }
@@ -210,7 +257,7 @@ const Products = {
       return false;
     } finally {
       const b = document.querySelector(`.oy-btn-sync[data-product-no="${CSS.escape(productNo)}"]`);
-      if (b) { b.disabled = false; b.textContent = '재고 동기화'; }
+      if (b) { b.disabled = false; b.textContent = '🔄 재고 동기화'; }
     }
   },
 
@@ -321,7 +368,7 @@ const Products = {
     } catch (e) {
       UI.showToast('토큰 발급 실패: ' + e.message, 'error');
       this._syncing = false;
-      if (syncBtn) { syncBtn.disabled = false; syncBtn.textContent = '전체 재고 동기화'; }
+      if (syncBtn) { syncBtn.disabled = false; syncBtn.textContent = '🔄 전체 재고 동기화'; }
       return;
     }
 
@@ -345,7 +392,7 @@ const Products = {
     }
 
     this._syncing = false;
-    if (syncBtn) { syncBtn.disabled = false; syncBtn.textContent = '전체 재고 동기화'; }
+    if (syncBtn) { syncBtn.disabled = false; syncBtn.textContent = '🔄 전체 재고 동기화'; }
     this.render();
     UI.showToast(`전체 동기화 완료! 성공 ${successCount}개, 실패 ${failCount}개`, successCount > 0 ? 'success' : 'error');
   },
