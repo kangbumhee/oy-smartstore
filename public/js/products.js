@@ -43,7 +43,13 @@ const Products = {
     const productNo = product.productNo || product.naverProductNo || '';
     const channelNo = product.channelProductNo || productNo;
     const goodsNo = product.goodsNo || '';
-    const storeUrl = channelNo ? `https://smartstore.naver.com/i/${encodeURIComponent(channelNo)}` : '';
+    const settings = Storage.getSettings();
+    const storeName = settings.storeName || '';
+    const storeUrl = channelNo && storeName
+      ? `https://smartstore.naver.com/${encodeURIComponent(storeName)}/products/${encodeURIComponent(channelNo)}`
+      : channelNo
+        ? `https://smartstore.naver.com/i/${encodeURIComponent(channelNo)}`
+        : '';
     const syncStatus = product.lastSyncAt
       ? `동기화: ${new Date(product.lastSyncAt).toLocaleString('ko-KR')}`
       : '';

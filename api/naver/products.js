@@ -38,6 +38,23 @@ module.exports = async function handler(req, res) {
       const { productNo } = body;
       if (!productNo) return res.status(400).json({ error: 'productNo required' });
 
+      if (body.action === 'syncStock') {
+        const { optionCombinations, useStockManagement } = body;
+        if (!optionCombinations || optionCombinations.length === 0) {
+          return res.status(400).json({ error: 'optionCombinations required for syncStock' });
+        }
+        const url = `${ORIGIN_PRODUCTS_URL}/${productNo}/option-stock`;
+        const payload = { optionInfo: { optionCombinations } };
+        if (useStockManagement !== undefined) payload.useStockManagement = useStockManagement;
+
+        const r = await proxyFetch(url, { method: 'PUT', headers, body: JSON.stringify(payload) });
+        const text = await r.text();
+        let data;
+        try { data = JSON.parse(text); } catch { data = { raw: text }; }
+        console.log(`[option-stock] productNo=${productNo} options=${optionCombinations.length} status=${r.status}`);
+        return res.status(r.status).json({ success: r.ok, data });
+      }
+
       const url = `${ORIGIN_PRODUCTS_URL}/${productNo}`;
       const payload = { originProduct: {} };
 
