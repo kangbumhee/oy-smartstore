@@ -1,6 +1,6 @@
 /**
  * AI Product Image Generator via EccoAPI (나노바나나 3.1)
- * Supports reference thumbnail for better results.
+ * Reference thumbnail: downloaded and sent as imageBase64 (not prompt URL text).
  */
 
 const ECCO_API_URL = 'https://eccoapi.com/api/v1/nanobanana31/generate';
@@ -33,15 +33,26 @@ module.exports = async function handler(req, res) {
   const startTime = Date.now();
 
   try {
+    let referenceImages = null;
+    if (thumbnail && String(thumbnail).trim().startsWith('http')) {
+      const imgData = await fetchImageAsBase64(String(thumbnail).trim());
+      if (imgData) {
+        referenceImages = [imgData];
+        console.log('[studio] 참조이미지 로드 성공:', String(thumbnail).substring(0, 80));
+      }
+    }
+
     const prompts = [];
     const numMain = Math.min(parseInt(count, 10) || 1, 5);
 
+    const hasRef = !!(referenceImages && referenceImages.length > 0);
+
     const mainPrompt = customPrompt
-      ? ensureProductContext(customPrompt, productName, brand, thumbnail)
-      : buildPrompt(productName, brand, category, null, thumbnail);
+      ? ensureProductContext(customPrompt, productName, brand)
+      : buildPrompt(productName, brand, category, null, hasRef);
 
     const thumbPrompt = rawThumbnailPrompt
-      ? ensureProductContext(String(rawThumbnailPrompt), productName, brand, thumbnail)
+      ? ensureProductContext(String(rawThumbnailPrompt), productName, brand)
       : null;
 
     for (let i = 0; i < numMain; i++) {
@@ -57,14 +68,14 @@ module.exports = async function handler(req, res) {
         if (opt.soldOut || prompts.length >= 5) continue;
         const optName = opt.name || opt.optionName || '';
         if (!optName) continue;
-        prompts.push(buildPrompt(productName, brand, category, optName, thumbnail));
+        prompts.push(buildPrompt(productName, brand, category, optName, hasRef));
       }
     }
 
-    console.log(`[studio] Generating ${prompts.length} images, prompt length: ${prompts[0]?.length || 0}`);
+    console.log(`[studio] Generating ${prompts.length} images, ref=${referenceImages ? referenceImages.length : 0}, prompt length: ${prompts[0]?.length || 0}`);
 
     const results = await Promise.allSettled(
-      prompts.map((p) => callEccoAPI(eccoKey, p))
+      prompts.map((p) => callEccoAPI(eccoKey, p, referenceImages))
     );
 
     const images = [];
@@ -99,15 +110,29 @@ function resolveEccoKey(req) {
   return headerKey || envKey;
 }
 
-function ensureProductContext(prompt, name, brand, thumbnail) {
-  let p = prompt;
-  if (thumbnail) {
-    p += ` Use this product image as visual reference for the product packaging and appearance: ${thumbnail}`;
+async function fetchImageAsBase64(imageUrl) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    const r = await fetch(imageUrl, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!r.ok) return null;
+    const buf = await r.arrayBuffer();
+    const base64 = Buffer.from(buf).toString('base64');
+    const contentType = r.headers.get('content-type') || 'image/jpeg';
+    const mimeType = contentType.split(';')[0].trim();
+    return { data: base64, mimeType };
+  } catch (e) {
+    console.warn('[studio] 참조이미지 다운로드 실패:', e.message);
+    return null;
   }
-  return p.substring(0, 2000);
 }
 
-function buildPrompt(name, brand, category, optionName, thumbnail) {
+function ensureProductContext(prompt, _name, _brand) {
+  return String(prompt || '').substring(0, 2000);
+}
+
+function buildPrompt(name, brand, category, optionName, hasReferenceImage) {
   const parts = [`Professional product advertisement photo featuring "${name}"`];
   if (brand) parts.push(`by "${brand}"`);
   if (optionName) parts.push(`(${optionName} variant)`);
@@ -115,6 +140,9 @@ function buildPrompt(name, brand, category, optionName, thumbnail) {
   parts.push('A young attractive Korean model is holding or presenting the product.');
   parts.push('Clean studio background, professional lighting, high-end commercial quality.');
   parts.push('Product clearly visible and prominent. Photorealistic.');
+  if (hasReferenceImage) {
+    parts.push('Match the EXACT product packaging design from the reference image — same colors, logos, patterns, and shape.');
+  }
 
   if (category) {
     const cat = (category || '').toLowerCase();
@@ -123,15 +151,17 @@ function buildPrompt(name, brand, category, optionName, thumbnail) {
     }
   }
   parts.push('NO text overlays. NO watermarks.');
-  if (thumbnail) {
-    parts.push(`Use this product image as reference for accurate product appearance: ${thumbnail}`);
-  }
   return parts.join(' ').substring(0, 2000);
 }
 
-async function callEccoAPI(apiKey, prompt) {
+async function callEccoAPI(apiKey, prompt, referenceImages) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 90000);
+
+  const payload = { prompt, imageSize: '1K', aspectRatio: '1:1' };
+  if (referenceImages && referenceImages.length > 0) {
+    payload.imageBase64 = referenceImages;
+  }
 
   try {
     const r = await fetch(ECCO_API_URL, {
@@ -140,7 +170,7 @@ async function callEccoAPI(apiKey, prompt) {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ prompt, imageSize: '1K', aspectRatio: '1:1' }),
+      body: JSON.stringify(payload),
       signal: controller.signal,
     });
 
