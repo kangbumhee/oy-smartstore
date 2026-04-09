@@ -67,6 +67,7 @@ const Products = {
           <div class="registered-item-meta">
             <span>판매가: ${Margin.formatPrice(product.sellingPrice)}</span>
             <span>등록일: ${date}</span>
+            ${product.isGroup ? '<span style="color:#6366f1;font-weight:600;">그룹상품</span>' : ''}
             ${optionCount > 0 ? `<span>옵션: ${optionCount}개</span>` : ''}
             ${syncStatus ? `<span class="sync-status ${syncClass}">${this._esc(syncStatus)}</span>` : ''}
           </div>

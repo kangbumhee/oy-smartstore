@@ -314,8 +314,6 @@ const Register = {
 
       UI.updateProgressStep(1, 'done', `② 업로드 ${uploadedImages.length}장 + 설명 조합 완료`);
 
-      UI.updateProgressStep(2, 'active', opts.length > 0 ? `③ 등록 중... (옵션 ${opts.length}개)` : '③ 등록 중...');
-
       const prefix = settings.namePrefix || '';
       const suffix = settings.nameSuffix || '';
       const registrationName = `${prefix}${prefix ? ' ' : ''}${cleanedBaseName}${suffix ? ' ' : ''}${suffix}`.trim();
@@ -337,7 +335,13 @@ const Register = {
         }
       }
 
-      const regData = await API.registerProduct({
+      const useGroupRegister = registrationOptions.length >= 2;
+      UI.updateProgressStep(2, 'active',
+        useGroupRegister
+          ? `③ 그룹상품 등록 중... (옵션 ${registrationOptions.length}개 → 개별 페이지)`
+          : opts.length > 0 ? `③ 등록 중... (옵션 ${opts.length}개)` : '③ 등록 중...');
+
+      const regPayload = {
         name: registrationName,
         sellingPrice: finalSellingPrice,
         categoryId,
@@ -347,14 +351,33 @@ const Register = {
         stock: defaultStock,
         brand: product.brand || '',
         oliveyoungCategory: oyCategory,
-      });
+      };
+
+      let regData;
+      if (useGroupRegister) {
+        console.log('[등록] 그룹상품 등록 시도 (옵션', registrationOptions.length, '개)');
+        regData = await API.registerGroupProduct(regPayload);
+
+        if (!regData.success && regData.fallbackToNormal) {
+          console.warn('[등록] 그룹등록 실패 → 일반등록 전환:', regData.error || regData.message);
+          UI.updateProgressStep(2, 'active', '③ 그룹등록 실패 → 일반등록으로 전환...');
+          regData = await API.registerProduct(regPayload);
+        }
+      } else {
+        regData = await API.registerProduct(regPayload);
+      }
 
       this.stopTimer();
       const totalTime = ((Date.now() - this._startTime) / 1000).toFixed(1);
+      const isGroup = regData.isGroup === true;
 
       if (regData.success) {
-        UI.updateProgressStep(2, 'done', `③ 등록 완료! (총 ${totalTime}초)`);
-        Storage.addRegistered({
+        const label = isGroup
+          ? `③ 그룹등록 완료! (옵션별 개별 페이지 생성, ${totalTime}초)`
+          : `③ 등록 완료! (총 ${totalTime}초)`;
+        UI.updateProgressStep(2, 'done', label);
+
+        const registered = {
           goodsNo: product.goodsNo,
           name: cleanedBaseName,
           brand: product.brand,
@@ -364,11 +387,24 @@ const Register = {
           marginRate,
           categoryId,
           categoryName,
-          productNo: regData.result?.originProductNo || '',
-          channelProductNo: regData.result?.smartstoreChannelProductNo || '',
-        });
+          isGroup,
+        };
+
+        if (isGroup) {
+          registered.groupProductNo = regData.groupProductNo || '';
+          registered.requestId = regData.requestId || '';
+          const pNos = regData.productNos || [];
+          registered.productNo = pNos[0]?.originProductNo || '';
+          registered.channelProductNo = pNos[0]?.smartstoreChannelProductNo || '';
+          registered.productNos = pNos;
+        } else {
+          registered.productNo = regData.result?.originProductNo || '';
+          registered.channelProductNo = regData.result?.smartstoreChannelProductNo || '';
+        }
+
+        Storage.addRegistered(registered);
         Storage.removeFromQueue(goodsNo);
-        this._addCloseButton(totalTime, cleanedBaseName, true);
+        this._addCloseButton(totalTime, cleanedBaseName, true, null, isGroup);
       } else {
         const errRaw = regData.error;
         let errMsg;
@@ -387,11 +423,12 @@ const Register = {
     }
   },
 
-  _addCloseButton(totalTime, productName, success, errMsg) {
+  _addCloseButton(totalTime, productName, success, errMsg, isGroup) {
     const stepsEl = document.getElementById('progress-steps');
     if (!stepsEl) return;
+    const groupLabel = isGroup ? ' (그룹상품 — 옵션별 개별 페이지)' : '';
     const msg = success
-      ? `<div style="text-align:center;margin:16px 0 8px;color:var(--success);font-weight:600;">등록 완료! (${totalTime}초)</div>`
+      ? `<div style="text-align:center;margin:16px 0 8px;color:var(--success);font-weight:600;">등록 완료!${groupLabel} (${totalTime}초)</div>`
       : `<div style="text-align:center;margin:16px 0 8px;color:var(--danger);font-weight:600;">등록 실패 (${totalTime}초)</div>`;
     stepsEl.insertAdjacentHTML('beforeend', `
       ${msg}
@@ -399,6 +436,11 @@ const Register = {
         <button class="btn btn-primary btn-sm" onclick="UI.hideProgress(); Register.render(); Products.render();" style="min-width:120px;">닫기</button>
       </div>
     `);
-    if (success) UI.showToast(`"${productName}" 스마트스토어 등록 완료! (${totalTime}초)`, 'success');
+    if (success) {
+      const toastMsg = isGroup
+        ? `"${productName}" 그룹상품 등록 완료! 옵션별 개별 페이지 생성됨 (${totalTime}초)`
+        : `"${productName}" 스마트스토어 등록 완료! (${totalTime}초)`;
+      UI.showToast(toastMsg, 'success');
+    }
   },
 };

@@ -96,6 +96,7 @@ const API = {
   // Naver (uses cached token)
   async getNaverAuth() { return this.post('/api/naver/auth', {}); },
   async registerProduct(data) { return this.post('/api/naver/register', data, true); },
+  async registerGroupProduct(data) { return this.post('/api/naver/register-group', data, true); },
   async uploadImages(imageUrls) { return this.post('/api/naver/upload-image', { imageUrls }, true); },
   async getCategories(params) { return this.get(`/api/naver/categories?${new URLSearchParams(params)}`, true); },
   async getBestCategory(oyCategory, productName) {
