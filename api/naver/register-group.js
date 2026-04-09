@@ -90,19 +90,22 @@ async function fetchOptionGuide(headers, categoryId) {
   }
 }
 
-/**
- * 올리브영 옵션명을 네이버 판매옵션 구조에 매핑.
- * 가이드의 모든 optionId에 대해 valueName을 채워야 함.
- * 첫 번째 optionId에 올리브영 옵션명을 넣고, 나머지 optionId에는 기본값("1개" 등)을 넣음.
- */
+function sanitizeValueName(name) {
+  let clean = name.replace(/[^\uAC00-\uD7A3\u3131-\u3163a-zA-Z0-9\-_+/().,\s]/g, '');
+  clean = clean.replace(/\s{2,}/g, ' ').trim();
+  if (clean.length > 50) clean = clean.substring(0, 50).trim();
+  return clean || '기본';
+}
+
 function buildStandardPurchaseOptions(optName, stdOptions) {
+  const safeName = sanitizeValueName(optName);
   if (!stdOptions || stdOptions.length === 0) {
-    return [{ valueName: optName }];
+    return [{ valueName: safeName }];
   }
 
   return stdOptions.map((spo, idx) => {
     if (idx === 0) {
-      return { optionId: spo.optionId, valueName: optName };
+      return { optionId: spo.optionId, valueName: safeName };
     }
     const defaults = pickDefaultValue(spo);
     return { optionId: spo.optionId, valueName: defaults };
@@ -145,13 +148,13 @@ async function pollGroupStatus(headers, requestId, timeoutMs, intervalMs) {
       const state = progress.state || data.state;
       console.log('[group-poll] state:', state);
 
-      if (state === 'COMPLETED' || state === 'ERROR') {
+      if (state === 'COMPLETED' || state === 'ERROR' || state === 'FAILED') {
         return {
           state,
           groupProductNo: data.groupProductNo || progress.groupProductNo || null,
           requestId: data.requestId || requestId,
           productNos: data.productNos || progress.productNos || [],
-          failReason: data.failReason || progress.failReason || null,
+          failReason: data.failReason || progress.failReason || progress.invalidInputs || null,
           raw: data,
         };
       }
@@ -228,8 +231,7 @@ module.exports = async function handler(req, res) {
     const sharedList = Array.isArray(sharedOptionalUploads) ? sharedOptionalUploads : [];
 
     const specificProducts = allOpts.map((opt, index) => {
-      let optName = (opt.name || opt.optionName || '').trim();
-      if (optName.length > 50) optName = optName.substring(0, 50);
+      let optName = sanitizeValueName((opt.name || opt.optionName || '').trim());
 
       const optPrice = parseInt(opt.sellingPrice || opt.price || 0, 10);
       const finalPrice = optPrice > 0 ? optPrice : Math.round(sellingPrice);
@@ -323,13 +325,14 @@ module.exports = async function handler(req, res) {
             state: 'COMPLETED',
           });
         }
-        if (final && final.state === 'ERROR') {
-          console.warn('[group-register] Async ERROR:', JSON.stringify(final).substring(0, 300));
+        if (final && (final.state === 'ERROR' || final.state === 'FAILED')) {
+          const reason = final.failReason || final.raw?.progress?.invalidInputs || final;
+          console.warn('[group-register] Async', final.state, ':', JSON.stringify(reason).substring(0, 500));
           return res.status(200).json({
             success: false,
-            error: final.failReason || final,
+            error: reason,
             fallbackToNormal: true,
-            message: '그룹등록 비동기 처리 실패',
+            message: `그룹등록 비동기 처리 ${final.state}`,
           });
         }
         console.warn('[group-register] Poll timeout — QUEUED never became COMPLETED, falling back');
