@@ -33,7 +33,31 @@ module.exports = async function handler(req, res) {
       console.log('[group-status] checking:', url);
       const r = await proxyFetch(url, { headers: { ...headers, Accept: 'application/json;charset=UTF-8' } });
       const text = await r.text();
-      results.statusCheck = { httpStatus: r.status, body: text.substring(0, 2000) };
+      let data = null;
+      try { data = JSON.parse(text); } catch { data = null; }
+
+      const progress = data?.progress || data || {};
+      results.statusCheck = {
+        httpStatus: r.status,
+        success: r.ok,
+        data,
+        body: text.substring(0, 2000),
+      };
+
+      return res.status(200).json({
+        success: r.ok,
+        action,
+        requestId,
+        data: data ? {
+          requestId: data.requestId || progress.requestId || requestId,
+          state: progress.state || data.state || '',
+          groupProductNo: data.groupProductNo || progress.groupProductNo || '',
+          productNos: data.productNos || progress.productNos || [],
+          failReason: data.failReason || progress.failReason || progress.invalidInputs || null,
+          raw: data,
+        } : null,
+        results,
+      });
     }
 
     if (action === 'status-no-param' || action === 'all') {

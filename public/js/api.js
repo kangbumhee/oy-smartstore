@@ -123,6 +123,9 @@ const API = {
   },
   async getNaverProducts(page = 1) { return this.get(`/api/naver/products?page=${page}`, true); },
   async getNaverProductDetail(productNo) { return this.get(`/api/naver/products?productNo=${encodeURIComponent(productNo)}`, true); },
+  async getGroupStatus(requestId) {
+    return this.get(`/api/naver/group-status?action=status&requestId=${encodeURIComponent(requestId)}`, true);
+  },
   async updateNaverProduct(data) { return this.put('/api/naver/products', data, true); },
   async syncOptionStock(data) { return this.put('/api/naver/products', { ...data, action: 'syncStock' }, true); },
   async deleteNaverProduct(productNo) { return this.delete(`/api/naver/products?productNo=${encodeURIComponent(productNo)}`, true); },

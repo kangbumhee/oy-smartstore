@@ -14,8 +14,115 @@ const Products = {
       .replace(/[\[\]\(\)\{\}\/+,&._-]/g, '');
   },
 
+  _matchProductNo(record, productNo) {
+    const target = String(productNo || '').trim();
+    if (!target) return false;
+
+    const topLevelCandidates = [
+      record?.productNo,
+      record?.naverProductNo,
+      record?.groupProductNo,
+      record?.channelProductNo,
+    ];
+    if (topLevelCandidates.some((candidate) => String(candidate || '').trim() === target)) {
+      return true;
+    }
+
+    const productEntries = Array.isArray(record?.productNos) ? record.productNos : [];
+    return productEntries.some((entry) => {
+      const entryCandidates = [
+        entry?.originProductNo,
+        entry?.productNo,
+        entry?.naverProductNo,
+        entry?.smartstoreChannelProductNo,
+        entry?.channelProductNo,
+      ];
+      return entryCandidates.some((candidate) => String(candidate || '').trim() === target);
+    });
+  },
+
   _findRegistered(productNo) {
-    return Storage.getRegistered().find((p) => (p.productNo || p.naverProductNo) === productNo) || null;
+    return Storage.getRegistered().find((record) => this._matchProductNo(record, productNo)) || null;
+  },
+
+  _isGroupRecord(record) {
+    const groupFlag = record?.isGroup;
+    if (groupFlag === true || groupFlag === 'true' || groupFlag === 'Y' || groupFlag === 'y' || groupFlag === 1 || groupFlag === '1') {
+      return true;
+    }
+
+    if (Array.isArray(record?.productNos) && record.productNos.length > 0) {
+      return true;
+    }
+
+    return Boolean(record?.requestId || record?.groupProductNo);
+  },
+
+  _getRecordKey(record, fallbackProductNo = '') {
+    return String(record?.productNo || record?.naverProductNo || fallbackProductNo || '').trim();
+  },
+
+  async _ensureGroupProductEntries(record, fallbackProductNo = '') {
+    const currentEntries = Array.isArray(record?.productNos) ? record.productNos.filter(Boolean) : [];
+    if (currentEntries.length > 0) {
+      return { ...record, productNos: currentEntries };
+    }
+
+    const requestId = String(record?.requestId || '').trim();
+    if (!requestId) {
+      return { ...record, productNos: [] };
+    }
+
+    try {
+      const statusResult = await API.getGroupStatus(requestId);
+      const recoveredEntries = Array.isArray(statusResult?.data?.productNos)
+        ? statusResult.data.productNos.filter(Boolean)
+        : [];
+
+      if (recoveredEntries.length === 0) {
+        return { ...record, productNos: [] };
+      }
+
+      const previousOptions = Array.isArray(record?.syncedOptions) ? record.syncedOptions : [];
+      const mergedEntries = recoveredEntries.map((entry, index) => {
+        const previousOption = previousOptions[index] || {};
+        const parsedStock = parseInt(entry?.stockQuantity ?? previousOption?.stock ?? 0, 10);
+        const stockQuantity = Number.isFinite(parsedStock) ? Math.max(0, parsedStock) : 0;
+        const usable = previousOption?.usable !== undefined
+          ? previousOption.usable
+          : (entry?.usable !== undefined ? entry.usable : stockQuantity > 0);
+
+        return {
+          ...entry,
+          optionName: entry?.optionName || previousOption?.name || '',
+          optionNumber: entry?.optionNumber || previousOption?.optionNumber || '',
+          stockQuantity,
+          usable,
+        };
+      });
+
+      const mergedRecord = {
+        ...record,
+        isGroup: true,
+        groupProductNo: statusResult?.data?.groupProductNo || record?.groupProductNo || '',
+        productNos: mergedEntries,
+      };
+
+      const recordKey = this._getRecordKey(record, fallbackProductNo) || mergedEntries[0]?.originProductNo || '';
+      if (recordKey) {
+        Storage.updateRegistered(recordKey, {
+          isGroup: true,
+          groupProductNo: mergedRecord.groupProductNo,
+          requestId,
+          productNos: mergedEntries,
+        });
+      }
+
+      return mergedRecord;
+    } catch (error) {
+      console.warn('[sync] group record recovery failed:', error?.message || error);
+      return { ...record, productNos: [] };
+    }
   },
 
   _getOptionStock(option) {
@@ -219,7 +326,7 @@ const Products = {
           <div class="registered-item-meta">
             <span>판매가: ${Margin.formatPrice(product.sellingPrice)}</span>
             <span>등록일: ${date}</span>
-            ${product.isGroup ? '<span style="color:#6366f1;font-weight:600;">그룹상품</span>' : ''}
+            ${this._isGroupRecord(product) ? '<span style="color:#6366f1;font-weight:600;">그룹상품</span>' : ''}
             ${optionCount > 0 ? `<span>옵션: ${optionCount}개</span>` : ''}
             ${syncStatus ? `<span class="sync-status ${syncClass}">${this._esc(syncStatus)}</span>` : ''}
           </div>
@@ -333,7 +440,8 @@ const Products = {
     }
 
     const record = this._findRegistered(productNo);
-    const isGroupProduct = record?.isGroup === true && Array.isArray(record.productNos) && record.productNos.length > 0;
+    const recordKey = this._getRecordKey(record, productNo);
+    const isGroupProduct = this._isGroupRecord(record);
     const btn = document.querySelector(`.oy-btn-sync[data-product-no="${CSS.escape(productNo)}"]`);
     if (btn) { btn.disabled = true; btn.textContent = '동기화 중...'; }
 
@@ -343,18 +451,27 @@ const Products = {
       }
 
       if (isGroupProduct) {
+        const hydratedRecord = await this._ensureGroupProductEntries(record, productNo);
+        if (!Array.isArray(hydratedRecord.productNos) || hydratedRecord.productNos.length === 0) {
+          if (!options.silent) UI.showToast('그룹상품 옵션 정보를 복구하지 못했습니다. 다시 등록이 필요할 수 있습니다', 'error');
+          return false;
+        }
+
         const oyOptions = await this._getOliveYoungOptions(goodsNo, !options.silent, !options.silent);
         if (oyOptions.length === 0) {
           if (!options.silent) UI.showToast('올리브영에서 옵션을 가져올 수 없습니다', 'error');
           return false;
         }
 
-        const groupResult = await this._syncGroupProduct(record, oyOptions);
+        const groupResult = await this._syncGroupProduct(hydratedRecord, oyOptions);
         if (groupResult.updatedCount > 0) {
-          Storage.updateRegistered(productNo, {
+          Storage.updateRegistered(recordKey, {
             lastSyncAt: Date.now(),
             syncedOptions: groupResult.syncedOptions,
-            productNos: groupResult.productNos || record.productNos,
+            productNos: groupResult.productNos || hydratedRecord.productNos,
+            isGroup: true,
+            requestId: hydratedRecord.requestId || '',
+            groupProductNo: hydratedRecord.groupProductNo || '',
           });
           this.render();
         }
@@ -389,7 +506,7 @@ const Products = {
 
       if (naverCombos.length === 0) {
         if (!options.silent) UI.showToast('옵션 없는 상품 — 재고 동기화 불필요', 'info');
-        Storage.updateRegistered(productNo, { lastSyncAt: Date.now(), syncedOptions: [] });
+        Storage.updateRegistered(recordKey, { lastSyncAt: Date.now(), syncedOptions: [] });
         this.render();
         return true;
       }
@@ -408,7 +525,7 @@ const Products = {
 
       const syncResult = await API.syncOptionStock({ productNo, optionCombinations: updatedCombos });
       if (syncResult.success) {
-        Storage.updateRegistered(productNo, {
+        Storage.updateRegistered(recordKey, {
           lastSyncAt: Date.now(),
           syncedOptions: updatedCombos.map((c) => ({ name: c.optionName1, stock: c.stockQuantity, usable: c.usable })),
         });
