@@ -238,51 +238,120 @@ const Products = {
       return { success: false, updatedCount: 0, failedCount: 0, syncedOptions: [], error: '그룹상품 옵션 매칭 실패' };
     }
 
-    const results = await Promise.allSettled(
-      updates.map((item) =>
-        API.updateNaverProduct({
-          productNo: item.productNo,
-          stock: item.stockQuantity,
-          statusType: item.statusType,
-        })
-      )
-    );
+    let groupProductNo = String(record?.groupProductNo || '').trim();
+    if (!groupProductNo) {
+      const fallbackProductNo = updates[0]?.productNo || this._getRecordKey(record);
+      if (fallbackProductNo) {
+        const detailResult = await API.getNaverProductDetail(fallbackProductNo);
+        if (detailResult?.success) {
+          groupProductNo = String(detailResult.data?.groupProduct?.groupProductNo || '').trim();
+        }
+      }
+    }
 
-    const syncedOptions = [];
-    const failedMessages = [];
-    const mergedProductNos = productEntries.map((entry, index) => ({ ...entry }));
+    if (!groupProductNo) {
+      return { success: false, updatedCount: 0, failedCount: updates.length, syncedOptions: [], error: '그룹상품 번호를 찾을 수 없습니다' };
+    }
 
-    results.forEach((result, index) => {
-      const item = updates[index];
-      if (result.status === 'fulfilled' && result.value?.success) {
-        syncedOptions.push({
-          name: item.optionName,
-          stock: item.stockQuantity,
-          usable: item.usable,
-        });
-        mergedProductNos[item.index] = {
-          ...mergedProductNos[item.index],
-          optionName: item.optionName,
-          optionNumber: item.optionNumber,
-          stockQuantity: item.stockQuantity,
-          usable: item.usable,
-        };
-        return;
+    const groupDetailResult = await API.getNaverGroupProduct(groupProductNo);
+    const currentGroup = groupDetailResult?.data?.groupProduct || groupDetailResult?.data || null;
+    const currentSpecificProducts = Array.isArray(currentGroup?.specificProducts) ? currentGroup.specificProducts : [];
+
+    if (!groupDetailResult?.success || !currentGroup || currentSpecificProducts.length === 0) {
+      return {
+        success: false,
+        updatedCount: 0,
+        failedCount: updates.length,
+        syncedOptions: [],
+        error: String(groupDetailResult?.data?.message || groupDetailResult?.error || '그룹상품 조회 실패'),
+      };
+    }
+
+    const updateMap = new Map(updates.map((item) => [String(item.productNo), item]));
+    let matchedCount = 0;
+    const nextSpecificProducts = currentSpecificProducts.map((specific, index) => {
+      const candidates = [
+        specific?.originProductNo,
+        productEntries[index]?.originProductNo,
+        productEntries[index]?.productNo,
+        productEntries[index]?.naverProductNo,
+      ].filter(Boolean).map((value) => String(value));
+
+      const matchedUpdate = candidates.map((candidate) => updateMap.get(candidate)).find(Boolean);
+      if (!matchedUpdate) {
+        return specific;
       }
 
-      const errorMessage = result.status === 'fulfilled'
-        ? String(result.value?.data?.message || result.value?.error || '옵션 재고 업데이트 실패')
-        : String(result.reason?.message || result.reason || '옵션 재고 업데이트 실패');
-      failedMessages.push(`${item.optionName}: ${errorMessage}`);
+      matchedCount += 1;
+      return {
+        ...specific,
+        stockQuantity: matchedUpdate.stockQuantity,
+      };
+    });
+
+    if (matchedCount === 0) {
+      return { success: false, updatedCount: 0, failedCount: updates.length, syncedOptions: [], error: '그룹상품 상세 옵션 매칭 실패' };
+    }
+
+    const groupUpdateResult = await API.updateNaverGroupProduct({
+      groupProductNo,
+      groupProduct: {
+        ...currentGroup,
+        specificProducts: nextSpecificProducts,
+      },
+    });
+
+    if (!groupUpdateResult?.success) {
+      return {
+        success: false,
+        updatedCount: 0,
+        failedCount: updates.length,
+        syncedOptions: [],
+        error: String(groupUpdateResult?.error || groupUpdateResult?.data?.message || '그룹상품 수정 실패'),
+      };
+    }
+
+    const syncedOptions = [];
+    const mergedProductNos = productEntries.map((entry, index) => ({ ...entry }));
+
+    updates.forEach((item) => {
+      syncedOptions.push({
+        name: item.optionName,
+        stock: item.stockQuantity,
+        usable: item.usable,
+      });
+      mergedProductNos[item.index] = {
+        ...mergedProductNos[item.index],
+        optionName: item.optionName,
+        optionNumber: item.optionNumber,
+        stockQuantity: item.stockQuantity,
+        usable: item.usable,
+      };
+    });
+
+    const returnedProductNos = Array.isArray(groupUpdateResult?.productNos) ? groupUpdateResult.productNos : [];
+    returnedProductNos.forEach((returned) => {
+      const targetIndex = mergedProductNos.findIndex((entry) => {
+        return String(entry?.originProductNo || entry?.productNo || entry?.naverProductNo || '') === String(returned?.originProductNo || '');
+      });
+
+      if (targetIndex >= 0) {
+        mergedProductNos[targetIndex] = {
+          ...mergedProductNos[targetIndex],
+          originProductNo: returned.originProductNo || mergedProductNos[targetIndex].originProductNo || '',
+          smartstoreChannelProductNo: returned.smartstoreChannelProductNo || mergedProductNos[targetIndex].smartstoreChannelProductNo || '',
+        };
+      }
     });
 
     return {
-      success: failedMessages.length === 0,
+      success: true,
       updatedCount: syncedOptions.length,
-      failedCount: failedMessages.length,
+      failedCount: 0,
       syncedOptions,
       productNos: mergedProductNos,
-      error: failedMessages[0] || '',
+      groupProductNo,
+      error: '',
     };
   },
 
@@ -493,7 +562,7 @@ const Products = {
             productNos: groupResult.productNos || hydratedRecord.productNos,
             isGroup: true,
             requestId: hydratedRecord.requestId || '',
-            groupProductNo: hydratedRecord.groupProductNo || '',
+            groupProductNo: groupResult.groupProductNo || hydratedRecord.groupProductNo || '',
           });
           this.render();
         }
