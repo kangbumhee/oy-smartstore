@@ -1,9 +1,160 @@
 /* Registered Products Page — checkbox select + sync + delete */
 const Products = {
   _syncing: false,
+  SYNC_CONCURRENCY: 3,
 
   _esc(s) {
     return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  },
+
+  _normalizeOptionKey(value) {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/\s+/g, '')
+      .replace(/[\[\]\(\)\{\}\/+,&._-]/g, '');
+  },
+
+  _findRegistered(productNo) {
+    return Storage.getRegistered().find((p) => (p.productNo || p.naverProductNo) === productNo) || null;
+  },
+
+  _getOptionStock(option) {
+    const raw = option?.quantity ?? option?.stockQuantity ?? 0;
+    const stock = parseInt(raw, 10);
+    return Number.isFinite(stock) ? stock : 0;
+  },
+
+  _isSoldOutOption(option) {
+    const flag = option?.soldOutFlag;
+    return option?.soldOut === true || flag === true || flag === 'Y' || flag === 'true' || this._getOptionStock(option) <= 0;
+  },
+
+  _findMatchedOption(targetName, oyOptions, indexHint = -1) {
+    const normalizedTarget = this._normalizeOptionKey(targetName);
+    if (normalizedTarget) {
+      let matched = oyOptions.find((oy) => this._normalizeOptionKey(oy.name || oy.optionName) === normalizedTarget);
+      if (matched) return matched;
+
+      matched = oyOptions.find((oy) => {
+        const normalized = this._normalizeOptionKey(oy.name || oy.optionName);
+        return normalized && (normalized.includes(normalizedTarget) || normalizedTarget.includes(normalized));
+      });
+      if (matched) return matched;
+    }
+
+    if (indexHint >= 0 && indexHint < oyOptions.length) {
+      return oyOptions[indexHint];
+    }
+    return null;
+  },
+
+  async _getOliveYoungOptions(goodsNo, preferExtension = false, allowExtension = true) {
+    const fetchers = preferExtension
+      ? [
+          ...(allowExtension ? [() => this._fetchOptionsViaExtension(goodsNo)] : []),
+          async () => {
+            const data = await API.getProductOptions(goodsNo);
+            return (data.success && data.options?.length > 0) ? data.options : [];
+          },
+        ]
+      : [
+          async () => {
+            const data = await API.getProductOptions(goodsNo);
+            return (data.success && data.options?.length > 0) ? data.options : [];
+          },
+          ...(allowExtension ? [() => this._fetchOptionsViaExtension(goodsNo)] : []),
+        ];
+
+    let lastError = null;
+    for (const fetcher of fetchers) {
+      try {
+        const options = await fetcher();
+        if (Array.isArray(options) && options.length > 0) return options;
+      } catch (e) {
+        lastError = e;
+      }
+    }
+    if (lastError) throw lastError;
+    return [];
+  },
+
+  async _syncGroupProduct(record, oyOptions) {
+    const productEntries = Array.isArray(record?.productNos) ? record.productNos : [];
+    if (productEntries.length === 0) {
+      return { success: false, updatedCount: 0, failedCount: 0, syncedOptions: [], error: '그룹상품 항목 정보가 없습니다' };
+    }
+
+    const updates = productEntries.map((entry, index) => {
+      const productNo = entry.originProductNo || entry.productNo || entry.naverProductNo || '';
+      const optionName = entry.optionName || entry.name || entry.optionName1 || record?.syncedOptions?.[index]?.name || '';
+      const matched = this._findMatchedOption(optionName, oyOptions, index);
+      if (!productNo || !matched) return null;
+
+      const stock = this._getOptionStock(matched);
+      const soldOut = this._isSoldOutOption(matched);
+      const stockQuantity = soldOut ? 0 : Math.min(stock, 999);
+
+      return {
+        index,
+        productNo,
+        optionName: optionName || matched.name || matched.optionName || `옵션${index + 1}`,
+        optionNumber: matched.optionNumber || entry.optionNumber || '',
+        stockQuantity,
+        usable: !soldOut,
+        statusType: soldOut ? 'OUTOFSTOCK' : 'SALE',
+      };
+    }).filter(Boolean);
+
+    if (updates.length === 0) {
+      return { success: false, updatedCount: 0, failedCount: 0, syncedOptions: [], error: '그룹상품 옵션 매칭 실패' };
+    }
+
+    const results = await Promise.allSettled(
+      updates.map((item) =>
+        API.updateNaverProduct({
+          productNo: item.productNo,
+          stock: item.stockQuantity,
+          statusType: item.statusType,
+        })
+      )
+    );
+
+    const syncedOptions = [];
+    const failedMessages = [];
+    const mergedProductNos = productEntries.map((entry, index) => ({ ...entry }));
+
+    results.forEach((result, index) => {
+      const item = updates[index];
+      if (result.status === 'fulfilled' && result.value?.success) {
+        syncedOptions.push({
+          name: item.optionName,
+          stock: item.stockQuantity,
+          usable: item.usable,
+        });
+        mergedProductNos[item.index] = {
+          ...mergedProductNos[item.index],
+          optionName: item.optionName,
+          optionNumber: item.optionNumber,
+          stockQuantity: item.stockQuantity,
+          usable: item.usable,
+        };
+        return;
+      }
+
+      const errorMessage = result.status === 'fulfilled'
+        ? String(result.value?.data?.message || result.value?.error || '옵션 재고 업데이트 실패')
+        : String(result.reason?.message || result.reason || '옵션 재고 업데이트 실패');
+      failedMessages.push(`${item.optionName}: ${errorMessage}`);
+    });
+
+    return {
+      success: failedMessages.length === 0,
+      updatedCount: syncedOptions.length,
+      failedCount: failedMessages.length,
+      syncedOptions,
+      productNos: mergedProductNos,
+      error: failedMessages[0] || '',
+    };
   },
 
   render() {
@@ -55,7 +206,7 @@ const Products = {
       ? `동기화: ${new Date(product.lastSyncAt).toLocaleString('ko-KR')}`
       : '';
     const syncClass = product.lastSyncAt ? 'synced' : 'not-synced';
-    const optionCount = (product.syncedOptions || []).length;
+    const optionCount = (product.syncedOptions || []).length || (product.productNos || []).length;
     const pnAttr = this._esc(productNo);
     const gAttr = this._esc(goodsNo);
 
@@ -175,23 +326,58 @@ const Products = {
     }
   },
 
-  async syncOne(productNo, goodsNo) {
+  async syncOne(productNo, goodsNo, options = {}) {
     if (!productNo || !goodsNo) {
-      UI.showToast('상품 정보가 부족합니다', 'error');
+      if (!options.silent) UI.showToast('상품 정보가 부족합니다', 'error');
       return false;
     }
 
+    const record = this._findRegistered(productNo);
+    const isGroupProduct = record?.isGroup === true && Array.isArray(record.productNos) && record.productNos.length > 0;
     const btn = document.querySelector(`.oy-btn-sync[data-product-no="${CSS.escape(productNo)}"]`);
     if (btn) { btn.disabled = true; btn.textContent = '동기화 중...'; }
 
     try {
-      await API.obtainNaverToken();
+      if (!options.skipToken) {
+        await API.obtainNaverToken();
+      }
+
+      if (isGroupProduct) {
+        const oyOptions = await this._getOliveYoungOptions(goodsNo, !options.silent, !options.silent);
+        if (oyOptions.length === 0) {
+          if (!options.silent) UI.showToast('올리브영에서 옵션을 가져올 수 없습니다', 'error');
+          return false;
+        }
+
+        const groupResult = await this._syncGroupProduct(record, oyOptions);
+        if (groupResult.updatedCount > 0) {
+          Storage.updateRegistered(productNo, {
+            lastSyncAt: Date.now(),
+            syncedOptions: groupResult.syncedOptions,
+            productNos: groupResult.productNos || record.productNos,
+          });
+          this.render();
+        }
+
+        if (!groupResult.success) {
+          if (!options.silent) {
+            UI.showToast(`그룹상품 동기화 실패: ${String(groupResult.error || '일부 옵션 실패').substring(0, 80)}`, 'error');
+          }
+          return false;
+        }
+
+        if (!options.silent) {
+          const soldOutCount = groupResult.syncedOptions.filter((c) => !c.usable).length;
+          UI.showToast(`그룹상품 동기화 완료! ${groupResult.updatedCount}개 옵션 (품절 ${soldOutCount}개)`, 'success');
+        }
+        return true;
+      }
 
       const naverDetail = await API.getNaverProductDetail(productNo);
       if (!naverDetail.success) {
         const errMsg = String(naverDetail.data?.message || naverDetail.error || '');
         if (naverDetail.status === 404 || errMsg.includes('NOT_FOUND') || errMsg.includes('존재하지 않')) {
-          UI.showToast(`동기화 에러: 존재하지 않는 상품입니다. (${productNo})`, 'error');
+          if (!options.silent) UI.showToast(`동기화 에러: 존재하지 않는 상품입니다. (${productNo})`, 'error');
           return false;
         }
         throw new Error(errMsg || '네이버 상품 조회 실패');
@@ -202,37 +388,21 @@ const Products = {
       const naverCombos = optInfo.optionCombinations || [];
 
       if (naverCombos.length === 0) {
-        UI.showToast('옵션 없는 상품 — 재고 동기화 불필요', 'info');
+        if (!options.silent) UI.showToast('옵션 없는 상품 — 재고 동기화 불필요', 'info');
         Storage.updateRegistered(productNo, { lastSyncAt: Date.now(), syncedOptions: [] });
         this.render();
         return true;
       }
 
-      let oyOptions = [];
-      try {
-        const optData = await API.getProductOptions(goodsNo);
-        if (optData.success && optData.options?.length > 0) {
-          oyOptions = optData.options;
-        }
-      } catch { /* server API fail */ }
-
+      const oyOptions = await this._getOliveYoungOptions(goodsNo, false, !options.silent);
       if (oyOptions.length === 0) {
-        try {
-          oyOptions = await this._fetchOptionsViaExtension(goodsNo);
-        } catch {
-          UI.showToast('올리브영 옵션 가져오기 실패', 'error');
-          return false;
-        }
-      }
-
-      if (oyOptions.length === 0) {
-        UI.showToast('올리브영에서 옵션을 가져올 수 없습니다', 'error');
+        if (!options.silent) UI.showToast('올리브영에서 옵션을 가져올 수 없습니다', 'error');
         return false;
       }
 
       const updatedCombos = this._matchAndUpdateOptions(naverCombos, oyOptions);
       if (updatedCombos.length === 0) {
-        UI.showToast('매칭 가능한 옵션이 없습니다', 'error');
+        if (!options.silent) UI.showToast('매칭 가능한 옵션이 없습니다', 'error');
         return false;
       }
 
@@ -243,15 +413,17 @@ const Products = {
           syncedOptions: updatedCombos.map((c) => ({ name: c.optionName1, stock: c.stockQuantity, usable: c.usable })),
         });
         this.render();
-        const soldOutCount = updatedCombos.filter((c) => !c.usable).length;
-        UI.showToast(`동기화 완료! ${updatedCombos.length}개 옵션 (품절 ${soldOutCount}개)`, 'success');
+        if (!options.silent) {
+          const soldOutCount = updatedCombos.filter((c) => !c.usable).length;
+          UI.showToast(`동기화 완료! ${updatedCombos.length}개 옵션 (품절 ${soldOutCount}개)`, 'success');
+        }
         return true;
       }
       const errMsg = String(syncResult.data?.message || syncResult.error || '동기화 실패');
-      UI.showToast(`동기화 실패: ${errMsg.substring(0, 80)}`, 'error');
+      if (!options.silent) UI.showToast(`동기화 실패: ${errMsg.substring(0, 80)}`, 'error');
       return false;
     } catch (e) {
-      UI.showToast('동기화 에러: ' + String(e.message).substring(0, 60), 'error');
+      if (!options.silent) UI.showToast('동기화 에러: ' + String(e.message).substring(0, 60), 'error');
       return false;
     } finally {
       const b = document.querySelector(`.oy-btn-sync[data-product-no="${CSS.escape(productNo)}"]`);
@@ -273,8 +445,8 @@ const Products = {
         });
       }
       if (matched) {
-        const stock = parseInt(matched.quantity || matched.stockQuantity || 0, 10);
-        const soldOut = matched.soldOut === true || matched.soldOutFlag === 'Y' || stock <= 0;
+        const stock = this._getOptionStock(matched);
+        const soldOut = this._isSoldOutOption(matched);
         return { id: combo.id, optionName1: combo.optionName1, stockQuantity: soldOut ? 0 : Math.min(stock, 999), price: combo.price || 0, usable: !soldOut };
       }
       return { id: combo.id, optionName1: combo.optionName1, stockQuantity: combo.stockQuantity || 0, price: combo.price || 0, usable: combo.usable !== false };
@@ -350,23 +522,34 @@ const Products = {
       return;
     }
 
-    for (let i = 0; i < targets.length; i++) {
-      const p = targets[i];
-      const productNo = p.productNo || p.naverProductNo;
-      const goodsNo = p.goodsNo;
-      if (syncBtn) syncBtn.textContent = `동기화 중... (${i + 1}/${targets.length})`;
+    const concurrency = Math.max(1, Math.min(this.SYNC_CONCURRENCY, targets.length));
+    let completed = 0;
+    let nextIndex = 0;
 
-      if (!productNo || !goodsNo) {
-        failCount++;
-        continue;
+    const worker = async () => {
+      while (true) {
+        const current = nextIndex;
+        nextIndex += 1;
+        if (current >= targets.length) return;
+
+        const p = targets[current];
+        const productNo = p.productNo || p.naverProductNo;
+        const goodsNo = p.goodsNo;
+
+        let ok = false;
+        if (productNo && goodsNo) {
+          ok = await this.syncOne(productNo, goodsNo, { skipToken: true, silent: true });
+        }
+
+        if (ok) successCount++;
+        else failCount++;
+
+        completed += 1;
+        if (syncBtn) syncBtn.textContent = `동기화 중... (${completed}/${targets.length})`;
       }
+    };
 
-      const ok = await this.syncOne(productNo, goodsNo);
-      if (ok) successCount++;
-      else failCount++;
-
-      if (i < targets.length - 1) await new Promise((r) => setTimeout(r, 1000));
-    }
+    await Promise.all(Array.from({ length: concurrency }, () => worker()));
 
     this._syncing = false;
     if (syncBtn) syncBtn.disabled = false;

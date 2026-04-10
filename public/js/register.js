@@ -697,10 +697,29 @@ const Register = {
         if (isGroup) {
           registered.groupProductNo = regData.groupProductNo || '';
           registered.requestId = regData.requestId || '';
-          const pNos = regData.productNos || [];
-          registered.productNo = pNos[0]?.originProductNo || '';
-          registered.channelProductNo = pNos[0]?.smartstoreChannelProductNo || '';
-          registered.productNos = pNos;
+          const pNos = Array.isArray(regData.productNos) ? regData.productNos : [];
+          const enrichedProductNos = pNos.map((item, idx) => {
+            const opt = registrationOptions[idx] || {};
+            const stockQuantity = Math.max(0, parseInt(opt.stockQuantity ?? opt.quantity ?? 0, 10) || 0);
+            return {
+              ...item,
+              optionName: (opt.name || opt.optionName || '').trim(),
+              optionNumber: opt.optionNumber || '',
+              stockQuantity,
+              usable: stockQuantity > 0 && opt.soldOut !== true && opt.soldOutFlag !== 'Y',
+            };
+          });
+          registered.productNo = enrichedProductNos[0]?.originProductNo || '';
+          registered.channelProductNo = enrichedProductNos[0]?.smartstoreChannelProductNo || '';
+          registered.productNos = enrichedProductNos;
+          registered.syncedOptions = registrationOptions.map((opt) => {
+            const stockQuantity = Math.max(0, parseInt(opt.stockQuantity ?? opt.quantity ?? 0, 10) || 0);
+            return {
+              name: (opt.name || opt.optionName || '').trim(),
+              stock: stockQuantity,
+              usable: stockQuantity > 0 && opt.soldOut !== true && opt.soldOutFlag !== 'Y',
+            };
+          });
         } else {
           registered.productNo = regData.result?.originProductNo || '';
           registered.channelProductNo = regData.result?.smartstoreChannelProductNo || '';
