@@ -2,6 +2,11 @@ const { getAccessToken, getAuthHeadersFromToken, resolveCredentials, resolveToke
 
 const ORIGIN_PRODUCTS_URL = `${NAVER_API_BASE}/v2/products/origin-products`;
 
+async function parseResponseBody(response) {
+  const text = await response.text();
+  try { return JSON.parse(text); } catch { return { raw: text }; }
+}
+
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, PUT, PATCH, DELETE, OPTIONS');
@@ -68,8 +73,48 @@ module.exports = async function handler(req, res) {
         if (body.statusType) payload.originProduct.statusType = body.statusType;
       }
 
-      const r = await proxyFetch(url, { method: 'PUT', headers, body: JSON.stringify(payload) });
-      const data = await r.json().catch(() => ({}));
+      let r = await proxyFetch(url, { method: 'PUT', headers, body: JSON.stringify(payload) });
+      let data = await parseResponseBody(r);
+
+      if (!r.ok && body.price === undefined && body.stock !== undefined && body.statusType) {
+        const retryPayloads = [];
+
+        if (payload.originProduct.stockQuantity !== undefined) {
+          retryPayloads.push({ originProduct: { stockQuantity: payload.originProduct.stockQuantity } });
+        }
+
+        if (payload.originProduct.statusType && payload.originProduct.stockQuantity === 0) {
+          retryPayloads.push({ originProduct: { statusType: payload.originProduct.statusType } });
+        }
+
+        for (const retryPayload of retryPayloads) {
+          const retryResponse = await proxyFetch(url, {
+            method: 'PUT',
+            headers,
+            body: JSON.stringify(retryPayload),
+          });
+          const retryData = await parseResponseBody(retryResponse);
+          if (retryResponse.ok) {
+            console.log('[origin-product-update] fallback success:', JSON.stringify({
+              productNo,
+              retryPayload,
+            }));
+            r = retryResponse;
+            data = retryData;
+            break;
+          }
+        }
+      }
+
+      if (!r.ok) {
+        console.warn('[origin-product-update] failed:', JSON.stringify({
+          productNo,
+          status: r.status,
+          payload,
+          message: data?.message || data?.error || data?.raw || '',
+        }).substring(0, 2000));
+      }
+
       return res.status(r.status).json({ success: r.ok, data });
     }
 

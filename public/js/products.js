@@ -62,13 +62,26 @@ const Products = {
     return String(record?.productNo || record?.naverProductNo || fallbackProductNo || '').trim();
   },
 
+  _hasUsableGroupEntry(entry) {
+    if (!entry || typeof entry !== 'object') return false;
+    return Boolean(
+      entry.originProductNo ||
+      entry.productNo ||
+      entry.naverProductNo ||
+      entry.smartstoreChannelProductNo ||
+      entry.channelProductNo
+    );
+  },
+
   async _ensureGroupProductEntries(record, fallbackProductNo = '') {
     const currentEntries = Array.isArray(record?.productNos) ? record.productNos.filter(Boolean) : [];
-    if (currentEntries.length > 0) {
+    const requestId = String(record?.requestId || '').trim();
+    const needsRecovery = currentEntries.length === 0 || currentEntries.some((entry) => !this._hasUsableGroupEntry(entry) || !entry?.originProductNo);
+
+    if (!needsRecovery) {
       return { ...record, productNos: currentEntries };
     }
 
-    const requestId = String(record?.requestId || '').trim();
     if (!requestId) {
       return { ...record, productNos: [] };
     }
@@ -85,17 +98,26 @@ const Products = {
 
       const previousOptions = Array.isArray(record?.syncedOptions) ? record.syncedOptions : [];
       const mergedEntries = recoveredEntries.map((entry, index) => {
+        const currentEntry = currentEntries[index] || {};
         const previousOption = previousOptions[index] || {};
-        const parsedStock = parseInt(entry?.stockQuantity ?? previousOption?.stock ?? 0, 10);
+        const parsedStock = parseInt(
+          entry?.stockQuantity ?? currentEntry?.stockQuantity ?? previousOption?.stock ?? 0,
+          10
+        );
         const stockQuantity = Number.isFinite(parsedStock) ? Math.max(0, parsedStock) : 0;
-        const usable = previousOption?.usable !== undefined
-          ? previousOption.usable
-          : (entry?.usable !== undefined ? entry.usable : stockQuantity > 0);
+        const usable = currentEntry?.usable !== undefined
+          ? currentEntry.usable
+          : (
+              previousOption?.usable !== undefined
+                ? previousOption.usable
+                : (entry?.usable !== undefined ? entry.usable : stockQuantity > 0)
+            );
 
         return {
+          ...currentEntry,
           ...entry,
-          optionName: entry?.optionName || previousOption?.name || '',
-          optionNumber: entry?.optionNumber || previousOption?.optionNumber || '',
+          optionName: entry?.optionName || currentEntry?.optionName || previousOption?.name || '',
+          optionNumber: entry?.optionNumber || currentEntry?.optionNumber || previousOption?.optionNumber || '',
           stockQuantity,
           usable,
         };
