@@ -27,13 +27,14 @@ const Products = {
         </label>
         <span class="products-count">총 ${list.length}개 상품</span>
         <div class="products-toolbar-actions">
-          <button type="button" class="btn btn-primary btn-sm" onclick="Products.syncAll()" id="sync-all-btn">동기화 (전체)</button>
+          <button type="button" class="btn btn-primary btn-sm" onclick="Products.syncSelected()" id="sync-selected-btn">동기화 중... (0/0)</button>
           <button type="button" class="btn btn-danger btn-sm" onclick="Products.removeSelected()" id="remove-selected-btn">선택 삭제</button>
         </div>
       </div>
       ${list.map((p, i) => this.renderItem(p, i)).join('')}
     `;
     this.bindRowActions();
+    this._updateSyncBtn();
   },
 
   renderItem(product, index) {
@@ -83,6 +84,19 @@ const Products = {
 
   toggleAll(checked) {
     document.querySelectorAll('.product-checkbox').forEach((cb) => { cb.checked = checked; });
+    this._updateSyncBtn();
+  },
+
+  _updateSyncBtn() {
+    const btn = document.getElementById('sync-selected-btn');
+    if (!btn) return;
+    const count = this.getSelectedIndices().length;
+    const total = Storage.getRegistered().length;
+    if (count > 0) {
+      btn.textContent = `선택 동기화 (${count}개)`;
+    } else {
+      btn.textContent = `동기화 (전체 ${total}개)`;
+    }
   },
 
   getSelectedIndices() {
@@ -110,6 +124,11 @@ const Products = {
     const listEl = document.getElementById('products-list');
     if (!listEl || listEl.dataset.bound === '1') return;
     listEl.dataset.bound = '1';
+    listEl.addEventListener('change', (e) => {
+      if (e.target.classList.contains('product-checkbox') || e.target.id === 'products-select-all') {
+        this._updateSyncBtn();
+      }
+    });
     listEl.addEventListener('click', (e) => {
       const syncEl = e.target.closest('.oy-btn-sync');
       if (syncEl) {
@@ -170,7 +189,12 @@ const Products = {
 
       const naverDetail = await API.getNaverProductDetail(productNo);
       if (!naverDetail.success) {
-        throw new Error(naverDetail.data?.message || naverDetail.error || '네이버 상품 조회 실패');
+        const errMsg = String(naverDetail.data?.message || naverDetail.error || '');
+        if (naverDetail.status === 404 || errMsg.includes('NOT_FOUND') || errMsg.includes('존재하지 않')) {
+          UI.showToast(`동기화 에러: 존재하지 않는 상품입니다. (${productNo})`, 'error');
+          return false;
+        }
+        throw new Error(errMsg || '네이버 상품 조회 실패');
       }
 
       const originProduct = naverDetail.data?.originProduct || naverDetail.data || {};
@@ -295,15 +319,23 @@ const Products = {
     });
   },
 
-  async syncAll() {
+  async syncSelected() {
     if (this._syncing) return UI.showToast('이미 동기화 중입니다', 'info');
     this._syncing = true;
 
-    const list = Storage.getRegistered();
-    if (list.length === 0) { this._syncing = false; return UI.showToast('등록된 상품이 없습니다', 'info'); }
+    const allList = Storage.getRegistered();
+    if (allList.length === 0) { this._syncing = false; return UI.showToast('등록된 상품이 없습니다', 'info'); }
 
-    const syncBtn = document.getElementById('sync-all-btn');
-    if (syncBtn) { syncBtn.disabled = true; syncBtn.textContent = `동기화 중... (0/${list.length})`; }
+    const selectedIdx = this.getSelectedIndices();
+    const targets = selectedIdx.length > 0
+      ? selectedIdx.map(i => allList[i]).filter(Boolean)
+      : allList;
+    const label = selectedIdx.length > 0 ? `선택 ${targets.length}개` : `전체 ${targets.length}개`;
+
+    if (targets.length === 0) { this._syncing = false; return UI.showToast('동기화할 상품이 없습니다', 'info'); }
+
+    const syncBtn = document.getElementById('sync-selected-btn');
+    if (syncBtn) { syncBtn.disabled = true; syncBtn.textContent = `동기화 중... (0/${targets.length})`; }
 
     let successCount = 0;
     let failCount = 0;
@@ -313,27 +345,32 @@ const Products = {
     } catch (e) {
       UI.showToast('토큰 실패: ' + e.message, 'error');
       this._syncing = false;
-      if (syncBtn) { syncBtn.disabled = false; syncBtn.textContent = '동기화 (전체)'; }
+      if (syncBtn) { syncBtn.disabled = false; }
+      this._updateSyncBtn();
       return;
     }
 
-    for (let i = 0; i < list.length; i++) {
-      const p = list[i];
+    for (let i = 0; i < targets.length; i++) {
+      const p = targets[i];
       const productNo = p.productNo || p.naverProductNo;
       const goodsNo = p.goodsNo;
-      if (syncBtn) syncBtn.textContent = `동기화 중... (${i + 1}/${list.length})`;
+      if (syncBtn) syncBtn.textContent = `동기화 중... (${i + 1}/${targets.length})`;
 
-      if (!productNo || !goodsNo) { failCount++; }
-      else {
-        const ok = await this.syncOne(productNo, goodsNo);
-        if (ok) successCount++; else failCount++;
+      if (!productNo || !goodsNo) {
+        failCount++;
+        continue;
       }
-      if (i < list.length - 1) await new Promise((r) => setTimeout(r, 1000));
+
+      const ok = await this.syncOne(productNo, goodsNo);
+      if (ok) successCount++;
+      else failCount++;
+
+      if (i < targets.length - 1) await new Promise((r) => setTimeout(r, 1000));
     }
 
     this._syncing = false;
-    if (syncBtn) { syncBtn.disabled = false; syncBtn.textContent = '동기화 (전체)'; }
+    if (syncBtn) syncBtn.disabled = false;
     this.render();
-    UI.showToast(`동기화 완료! 성공 ${successCount}, 실패 ${failCount}`, successCount > 0 ? 'success' : 'error');
+    UI.showToast(`동기화 완료! (${label}) 성공 ${successCount}, 실패 ${failCount}`, successCount > 0 ? 'success' : 'error');
   },
 };

@@ -71,6 +71,12 @@ const UI = {
     const marginRate = product.marginRate || settings.marginRate || 15;
     const calc = Margin.calculate(product.price, marginRate);
     const thumb = product.thumbnail || '';
+    const oyCategory = `${product.category || ''} ${product.subCategory || ''}`.trim();
+    const saved = Storage.getSavedCategory(oyCategory);
+    const manualCat = product._naverCategory || saved;
+    const catLabel = manualCat ? manualCat.name : (oyCategory || '미분류');
+    const catSource = manualCat ? (product._naverCategory ? '수동' : '저장됨') : '자동';
+    const catColor = manualCat ? '#16a34a' : '#6366f1';
 
     return `
       <div class="queue-item" id="queue-${product.goodsNo}">
@@ -79,6 +85,22 @@ const UI = {
           <div class="queue-item-info">
             <div class="queue-item-brand">${product.brand || ''}</div>
             <div class="queue-item-name">${product.name || ''}</div>
+            <div class="queue-meta-row" style="margin:6px 0;display:flex;flex-wrap:wrap;gap:8px;font-size:12px;">
+              <div style="display:flex;align-items:center;gap:4px;">
+                <span style="color:#94a3b8;font-size:11px;">카테고리:</span>
+                <span style="color:${catColor};font-weight:500;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${this._escHtml(catLabel)}">${this._escHtml(catLabel)}</span>
+                <span style="font-size:10px;padding:1px 5px;border-radius:8px;background:${catColor}15;color:${catColor};border:1px solid ${catColor}40;">${catSource}</span>
+                <button type="button" style="font-size:11px;padding:1px 5px;cursor:pointer;border:1px solid #e2e8f0;border-radius:5px;background:#fff;color:#6366f1;" onclick="Register.openCategorySelector('${product.goodsNo}')">변경</button>
+              </div>
+              <div style="display:flex;align-items:center;gap:4px;">
+                <span style="color:#94a3b8;font-size:11px;">브랜드:</span>
+                <span style="color:#334155;font-weight:500;">${this._escHtml(product.brand || '미설정')}</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:4px;">
+                <span style="color:#94a3b8;font-size:11px;">제조사:</span>
+                <span style="color:#334155;">${this._escHtml(product._manufacturer || product.brand || '자동')}</span>
+              </div>
+            </div>
             <div class="queue-item-prices">
               <div class="price-box">
                 <span class="label">올리브영가</span>

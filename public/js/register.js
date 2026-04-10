@@ -86,7 +86,7 @@ const Register = {
   cleanProductName(rawName) {
     if (!rawName) return rawName;
     let name = rawName;
-    const patterns = [
+    const bracketPatterns = [
       /\[[^\]]*올영[^\]]*\]/gi, /\[[^\]]*증정[^\]]*\]/gi,
       /\[[^\]]*기획[^\]]*\]/gi, /\[[^\]]*에디션[^\]]*\]/gi,
       /\[[^\]]*PICK[^\]]*\]/gi, /\[[^\]]*공동개발[^\]]*\]/gi,
@@ -95,11 +95,20 @@ const Register = {
       /\[[^\]]*컬러추가[^\]]*\]/gi, /\[[^\]]*본품[^\]]*\]/gi,
       /\[\d+\+\d+\]/g,
     ];
-    for (const p of patterns) name = name.replace(p, '');
+    for (const p of bracketPatterns) name = name.replace(p, '');
     name = name.replace(/\(단품[\/]?기획\)/g, '');
     name = name.replace(/\(본품[+][^\)]*\)/g, '');
+    name = name.replace(/,?\s*FREE\s*\(One\s*size\)/gi, '');
+    name = name.replace(/,?\s*FREE$/gi, '');
+    name = name.replace(/,?\s*\(One\s*size\)/gi, '');
+    name = name.replace(/\d+COLOR\s*/gi, '');
+    name = name.replace(/증정[^)\]]*[\])]/gi, '');
+    name = name.replace(/레디백\s*증정/gi, '');
+    name = name.replace(/,\s*증정[^,]*/gi, '');
+    name = name.replace(/\bfree\b/gi, '');
+    name = name.replace(/,\s*$/, '');
     name = name.replace(/\s{2,}/g, ' ').trim();
-    name = name.replace(/^[\s\/]+|[\s\/]+$/g, '').trim();
+    name = name.replace(/^[\s\/,]+|[\s\/,]+$/g, '').trim();
     return name || rawName;
   },
 
@@ -169,6 +178,141 @@ const Register = {
     });
   },
 
+  async openCategorySelector(goodsNo) {
+    const queue = Storage.getQueue();
+    const product = queue.find(p => p.goodsNo === goodsNo);
+    if (!product) return;
+    const oyCategory = `${product.category || ''} ${product.subCategory || ''}`.trim();
+    const saved = product._naverCategory || Storage.getSavedCategory(oyCategory);
+
+    let autoCategory = null;
+    const tokenReady = localStorage.getItem('naver_token');
+
+    UI.showModal(`
+      <h3 style="margin:0 0 12px;">네이버 카테고리 선택</h3>
+      <p style="font-size:13px;color:#666;margin:0 0 4px;">
+        <strong>${this._escHtml(product.name)}</strong>
+      </p>
+      <p style="font-size:12px;color:#94a3b8;margin:0 0 16px;">올리브영: ${this._escHtml(oyCategory)}</p>
+
+      <div id="cat-auto-section" style="margin-bottom:16px;">
+        <div style="font-size:12px;font-weight:600;color:#6366f1;margin-bottom:6px;">🤖 자동 감지</div>
+        <div id="cat-auto-result" style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;color:#64748b;">
+          감지 중...
+        </div>
+      </div>
+
+      ${saved ? `<div style="margin-bottom:16px;">
+        <div style="font-size:12px;font-weight:600;color:#16a34a;margin-bottom:6px;">💾 저장된 매핑</div>
+        <div style="padding:8px 12px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;font-size:13px;display:flex;align-items:center;justify-content:space-between;">
+          <span>${this._escHtml(saved.name)} <span style="color:#94a3b8;">(${saved.id})</span></span>
+          <button class="btn btn-sm btn-outline" onclick="Register._applyCategoryFromSaved('${goodsNo}')" style="font-size:11px;">이것 사용</button>
+        </div>
+      </div>` : ''}
+
+      <div style="margin-bottom:12px;">
+        <div style="font-size:12px;font-weight:600;color:#334155;margin-bottom:6px;">🔍 직접 검색</div>
+        <div style="display:flex;gap:8px;">
+          <input type="text" id="cat-search-input" placeholder="카테고리 검색 (예: 립틴트, 선크림, 샴푸...)" style="flex:1;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;" />
+          <button class="btn btn-primary btn-sm" onclick="Register._searchCategories()" id="cat-search-btn">검색</button>
+        </div>
+      </div>
+
+      <div id="cat-search-results" style="max-height:250px;overflow-y:auto;margin-bottom:12px;"></div>
+
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;">
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#64748b;cursor:pointer;">
+          <input type="checkbox" id="cat-save-mapping" checked style="width:15px;height:15px;" />
+          같은 올리브영 카테고리에 자동 적용 (${this._escHtml(oyCategory)})
+        </label>
+      </div>
+
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button class="btn btn-outline btn-sm" onclick="UI.hideModal()">취소</button>
+      </div>
+    `);
+
+    const searchInput = document.getElementById('cat-search-input');
+    searchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') Register._searchCategories();
+    });
+
+    this._catSelectorGoodsNo = goodsNo;
+    this._catSelectorOyCategory = oyCategory;
+
+    if (tokenReady) {
+      try {
+        const cat = await API.getBestCategory(oyCategory, product.name);
+        autoCategory = { id: cat.id, name: cat.name };
+        const autoEl = document.getElementById('cat-auto-result');
+        if (autoEl) {
+          autoEl.innerHTML = `
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <span>${this._escHtml(cat.name)} <span style="color:#94a3b8;">(${cat.id})</span></span>
+              <button class="btn btn-sm btn-primary" onclick="Register._applyCategory('${goodsNo}', '${cat.id}', '${this._escHtml(cat.name).replace(/'/g, "\\'")}')">선택</button>
+            </div>`;
+        }
+        this._autoCategory = autoCategory;
+      } catch {
+        const autoEl = document.getElementById('cat-auto-result');
+        if (autoEl) autoEl.textContent = '자동 감지 실패 — 직접 검색해주세요';
+      }
+    }
+  },
+
+  async _searchCategories() {
+    const input = document.getElementById('cat-search-input');
+    const keyword = (input?.value || '').trim();
+    if (!keyword) return;
+
+    const resultsEl = document.getElementById('cat-search-results');
+    if (!resultsEl) return;
+    resultsEl.innerHTML = '<div style="padding:12px;text-align:center;color:#94a3b8;font-size:13px;">검색 중...</div>';
+
+    try {
+      const data = await API.searchCategories(keyword);
+      const results = data.results || [];
+      if (results.length === 0) {
+        resultsEl.innerHTML = '<div style="padding:12px;text-align:center;color:#94a3b8;font-size:13px;">검색 결과가 없습니다</div>';
+        return;
+      }
+      resultsEl.innerHTML = results.map(r => `
+        <div style="padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:4px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;transition:background 0.15s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='#fff'">
+          <div>
+            <div style="font-size:13px;color:#334155;">${this._escHtml(r.name)}</div>
+            <div style="font-size:11px;color:#94a3b8;">${r.id}</div>
+          </div>
+          <button class="btn btn-sm btn-outline" onclick="Register._applyCategory('${this._catSelectorGoodsNo}', '${r.id}', '${this._escHtml(r.name).replace(/'/g, "\\'")}')">선택</button>
+        </div>
+      `).join('');
+    } catch (e) {
+      resultsEl.innerHTML = `<div style="padding:12px;color:#dc2626;font-size:13px;">검색 실패: ${e.message}</div>`;
+    }
+  },
+
+  _applyCategory(goodsNo, catId, catName) {
+    const saveMapping = document.getElementById('cat-save-mapping')?.checked;
+    const oyCategory = this._catSelectorOyCategory;
+
+    Storage.updateQueueItem(goodsNo, { _naverCategory: { id: catId, name: catName } });
+
+    if (saveMapping && oyCategory) {
+      Storage.setCategoryMapping(oyCategory, { id: catId, name: catName });
+      UI.showToast(`"${oyCategory}" → "${catName}" 매핑 저장됨`, 'success');
+    } else {
+      UI.showToast(`카테고리 선택: ${catName}`, 'success');
+    }
+
+    UI.hideModal();
+    this.render();
+  },
+
+  _applyCategoryFromSaved(goodsNo) {
+    const oyCategory = this._catSelectorOyCategory;
+    const saved = Storage.getSavedCategory(oyCategory);
+    if (saved) this._applyCategory(goodsNo, saved.id, saved.name);
+  },
+
   async registerOne(goodsNo) {
     const queue = Storage.getQueue();
     const product = queue.find((p) => p.goodsNo === goodsNo);
@@ -197,8 +341,11 @@ const Register = {
     const settings = Storage.getSettings();
     const oyCategory = `${product.category || ''} ${product.subCategory || ''}`.trim();
 
+    const manualCat = product._naverCategory || Storage.getSavedCategory(oyCategory);
+    const skipCategoryApi = !!manualCat;
+
     const steps = [
-      { label: '① 토큰 + 이미지 + 상세설명 + 카테고리 (병렬)...', status: 'active' },
+      { label: skipCategoryApi ? '① 토큰 + 이미지 + 상세설명 (병렬)...' : '① 토큰 + 이미지 + 상세설명 + 카테고리 (병렬)...', status: 'active' },
       { label: '② 이미지 업로드 중...', status: 'pending' },
       { label: `③ 스마트스토어 등록 중... ${optCount > 0 ? `(옵션 ${optCount}개)` : ''}`, status: 'pending' },
     ];
@@ -206,7 +353,7 @@ const Register = {
     this.startTimer();
 
     try {
-      UI.updateProgressStep(0, 'active', '① 토큰·이미지·설명·카테고리 동시 진행 중...');
+      UI.updateProgressStep(0, 'active', skipCategoryApi ? '① 토큰·이미지·설명 동시 진행 중... (카테고리 수동)' : '① 토큰·이미지·설명·카테고리 동시 진행 중...');
 
       const tpl = settings.imgPromptTemplate || 'studio_white';
       let tplForDetail = tpl;
@@ -266,20 +413,22 @@ const Register = {
           imageUrls: [],
           geminiModel: settings.geminiModel || undefined,
         }),
-        (async () => {
-          await tokenP;
-          try {
-            const cat = await API.getBestCategory(oyCategory, product.name);
-            return { id: cat.id || cat.naver_category_id, name: cat.name || cat.naver_category_name };
-          } catch {
-            try {
-              const ai = await API.classifyCategory(product.name, oyCategory);
-              return { id: ai.naver_category_id, name: ai.naver_category_name };
-            } catch {
-              return null;
-            }
-          }
-        })(),
+        skipCategoryApi
+          ? Promise.resolve(manualCat)
+          : (async () => {
+              await tokenP;
+              try {
+                const cat = await API.getBestCategory(oyCategory, product.name);
+                return { id: cat.id || cat.naver_category_id, name: cat.name || cat.naver_category_name };
+              } catch {
+                try {
+                  const ai = await API.classifyCategory(product.name, oyCategory);
+                  return { id: ai.naver_category_id, name: ai.naver_category_name };
+                } catch {
+                  return null;
+                }
+              }
+            })(),
       ]);
 
       if (tokenResult.status === 'rejected' || !tokenResult.value) {
@@ -322,22 +471,82 @@ const Register = {
         categoryName = catResult.value.name;
       }
       if (!categoryId) { categoryId = '50000803'; categoryName = '기타스킨케어 (폴백)'; }
+      const catSourceLabel = skipCategoryApi ? '수동' : '자동';
 
       const step0Time = ((Date.now() - this._startTime) / 1000).toFixed(1);
       UI.updateProgressStep(0, 'done',
-        `① 완료 (${step0Time}초) — 이미지 ${imageUrls.length}장 | 설명 ${descHtml.length > 100 ? 'AI' : '폴백'} | ${categoryName}`);
+        `① 완료 (${step0Time}초) — 이미지 ${imageUrls.length}장 | 설명 ${descHtml.length > 100 ? 'AI' : '폴백'} | ${categoryName} (${catSourceLabel})`);
 
-      UI.updateProgressStep(1, 'active', `② 이미지 ${imageUrls.length}장 업로드 중...`);
+      UI.updateProgressStep(1, 'active', `② 이미지 ${imageUrls.length}장 업로드 + 태그 + 브랜드/속성 조회 중...`);
 
-      const uploadData = await API.uploadImages(imageUrls);
+      const [uploadData, tagData, attrData] = await Promise.all([
+        API.uploadImages(imageUrls),
+        API.getProductTags({
+          productName: cleanedBaseName,
+          categoryName: categoryName || '',
+          brand: product.brand || '',
+        }).catch(e => { console.warn('[등록] 태그 생성 실패:', e.message); return { tags: [] }; }),
+        API.getCategoryAttributes(categoryId).catch(e => {
+          console.warn('[등록] 속성 조회 실패:', e.message);
+          return { attributes: [], requiredCount: 0 };
+        }),
+      ]);
       const uploadedImages = (uploadData.uploaded?.length > 0) ? uploadData.uploaded : [];
       if (uploadData.errors?.length > 0) console.warn('[등록] 업로드 에러:', uploadData.errors);
+      const sellerTags = tagData.tags || [];
+      if (sellerTags.length > 0) console.log('[등록] 태그', sellerTags.length, '개:', sellerTags.map(t => t.text).join(', '));
+
+      let brandName = (product.brand || '').trim();
+      if (!brandName && cleanedBaseName) {
+        const m = cleanedBaseName.match(/^([\w가-힣·&]+)/u);
+        if (m) brandName = m[1];
+      }
+      const manufacturerName = brandName;
+      if (brandName) console.log('[등록] 브랜드:', brandName, '| 제조사:', manufacturerName);
+
+      let productAttributes = [];
+      const attrs = Array.isArray(attrData.attributes) ? attrData.attributes : [];
+      for (const attr of attrs) {
+        if (!attr.required) continue;
+        const vals = attr.values || [];
+        const type = attr.type || 'SINGLE_SELECT';
+        if (type === 'DIRECT_INPUT' || vals.length === 0) {
+          productAttributes.push({
+            attributeSeq: attr.attributeSeq,
+            attributeRealValue: '상세페이지 참조',
+          });
+          continue;
+        }
+        if (type === 'RANGE' && vals.length > 0) {
+          const v = vals[Math.min(1, vals.length - 1)] || vals[0];
+          const num = String(v.value || '').replace(/[^\d.]/g, '') || '1';
+          const row = {
+            attributeSeq: attr.attributeSeq,
+            attributeValueSeq: v.valueSeq,
+            attributeRealValue: num,
+          };
+          if (attr.unitCode) row.attributeRealValueUnitCode = attr.unitCode;
+          productAttributes.push(row);
+          continue;
+        }
+        productAttributes.push({
+          attributeSeq: attr.attributeSeq,
+          attributeValueSeq: vals[0].valueSeq,
+        });
+      }
+      if (productAttributes.length > 0) {
+        console.log('[등록] 필수 속성', productAttributes.length, '건 자동 입력 (전체:', attrs.length + '건)');
+      }
 
       if (uploadedImages.length === 0) {
         UI.updateProgressStep(1, 'error', '이미지 업로드 실패');
         this.stopTimer();
         return;
       }
+
+      const tagSummary = sellerTags.length > 0
+        ? `| 태그 ${sellerTags.length}개`
+        : '| 태그 없음';
 
       const naverImgUrls = uploadedImages.map((img) => img.url).filter(Boolean);
       const thumbUploads = uploadedImages.slice(0, totalThumbnails);
@@ -379,7 +588,9 @@ const Register = {
         }
       }
 
-      UI.updateProgressStep(1, 'done', `② 업로드 ${uploadedImages.length}장 + 설명 조합 완료`);
+      const brandSummary = brandName ? `브랜드:${brandName}` : '';
+      const attrSummary = productAttributes.length > 0 ? `속성:${productAttributes.length}건` : `속성:${attrs.length}건(선택)`;
+      UI.updateProgressStep(1, 'done', `② 업로드 ${uploadedImages.length}장 ${tagSummary} | ${brandSummary} | ${attrSummary}`);
 
       const prefix = settings.namePrefix || '';
       const suffix = settings.nameSuffix || '';
@@ -426,8 +637,12 @@ const Register = {
         uploadedImages,
         options: registrationOptions,
         stock: defaultStock,
-        brand: product.brand || '',
+        brand: brandName || product.brand || '',
         oliveyoungCategory: oyCategory,
+        sellerTags,
+        brandName: brandName || undefined,
+        manufacturerName: manufacturerName || undefined,
+        productAttributes: productAttributes.length > 0 ? productAttributes : undefined,
       };
 
       if (useGroupRegister && opts.length > 1 && thumbUploads.length > 0) {
@@ -501,6 +716,9 @@ const Register = {
         else if (errRaw?.message) errMsg = errRaw.message;
         else errMsg = JSON.stringify(errRaw || '알 수 없는 오류');
         console.error('[등록 실패 상세]', errRaw);
+        if (regData.invalidInputs) {
+          console.error('[invalidInputs]', JSON.stringify(regData.invalidInputs, null, 2));
+        }
         UI.updateProgressStep(2, 'error', `등록 실패 (${totalTime}초): ${errMsg.substring(0, 100)}`);
         this._addCloseButton(totalTime, product.name, false, errMsg);
       }

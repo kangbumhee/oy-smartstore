@@ -115,6 +115,12 @@ const API = {
   async getBestCategory(oyCategory, productName) {
     return this.get(`/api/naver/categories?mode=best-match&oyCategory=${encodeURIComponent(oyCategory)}&productName=${encodeURIComponent(productName)}`, true);
   },
+  async searchCategories(keyword) {
+    return this.get(`/api/naver/categories?keyword=${encodeURIComponent(keyword)}`, true);
+  },
+  async getCategoryAttributes(categoryId) {
+    return this.get(`/api/naver/attributes?categoryId=${encodeURIComponent(categoryId)}`, true);
+  },
   async getNaverProducts(page = 1) { return this.get(`/api/naver/products?page=${page}`, true); },
   async getNaverProductDetail(productNo) { return this.get(`/api/naver/products?productNo=${encodeURIComponent(productNo)}`, true); },
   async updateNaverProduct(data) { return this.put('/api/naver/products', data, true); },
@@ -132,6 +138,9 @@ const API = {
     });
     return r.json();
   },
+
+  // Tags
+  async getProductTags(data) { return this.post('/api/naver/tags', data, true); },
 
   // AI
   async generateDescription(data) { return this.post('/api/ai/description', data); },

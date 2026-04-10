@@ -5,6 +5,7 @@ const Storage = {
     REGISTERED: 'oy_registered_products',
     SETTINGS: 'oy_settings',
     CREDENTIALS: 'oy_credentials',
+    CATEGORY_MAP: 'oy_category_mappings',
   },
 
   get(key, fallback = null) {
@@ -88,5 +89,24 @@ const Storage = {
 
   setCredentials(creds) {
     this.set(this.KEYS.CREDENTIALS, creds);
+  },
+
+  getCategoryMap() { return this.get(this.KEYS.CATEGORY_MAP, {}); },
+
+  setCategoryMapping(oyCategory, naverCat) {
+    const map = this.getCategoryMap();
+    map[oyCategory] = { id: naverCat.id, name: naverCat.name, savedAt: Date.now() };
+    this.set(this.KEYS.CATEGORY_MAP, map);
+  },
+
+  getSavedCategory(oyCategory) {
+    const map = this.getCategoryMap();
+    return map[oyCategory] || null;
+  },
+
+  removeCategoryMapping(oyCategory) {
+    const map = this.getCategoryMap();
+    delete map[oyCategory];
+    this.set(this.KEYS.CATEGORY_MAP, map);
   },
 };

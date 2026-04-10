@@ -24,7 +24,16 @@ function cleanProductName(rawName) {
   for (const p of patterns) name = name.replace(p, '');
   name = name.replace(/\(단품[\/]?기획\)/g, '');
   name = name.replace(/\(본품[+][^\)]*\)/g, '');
-  return name.replace(/\s{2,}/g, ' ').trim().replace(/^[\s\/]+|[\s\/]+$/g, '').trim() || rawName;
+  name = name.replace(/,?\s*FREE\s*\(One\s*size\)/gi, '');
+  name = name.replace(/,?\s*FREE$/gi, '');
+  name = name.replace(/,?\s*\(One\s*size\)/gi, '');
+  name = name.replace(/\d+COLOR\s*/gi, '');
+  name = name.replace(/증정[^)\]]*[\])]/gi, '');
+  name = name.replace(/레디백\s*증정/gi, '');
+  name = name.replace(/,\s*증정[^,]*/gi, '');
+  name = name.replace(/\bfree\b/gi, '');
+  name = name.replace(/,\s*$/, '');
+  return name.replace(/\s{2,}/g, ' ').trim().replace(/^[\s\/,]+|[\s\/,]+$/g, '').trim() || rawName;
 }
 
 /**
@@ -181,7 +190,13 @@ module.exports = async function handler(req, res) {
     brand = '', oliveyoungCategory = '',
     optionThumbnailUploads = [],
     sharedOptionalUploads = [],
+    sellerTags = [],
+    brandId, brandName: reqBrandName, manufacturerId, manufacturerName: reqManufacturerName,
+    productAttributes = [],
   } = body;
+
+  const effectiveBrand = String(brand || reqBrandName || '').trim();
+  const effectiveManufacturer = String(reqManufacturerName || effectiveBrand || '').trim();
 
   if (!name || !sellingPrice || !categoryId || !detailHtml) {
     return res.status(400).json({ error: 'name, sellingPrice, categoryId, detailHtml required' });
@@ -225,10 +240,14 @@ module.exports = async function handler(req, res) {
       }
     }
 
-    const productNotice = getProductNotice(oliveyoungCategory, cleanedName, brand);
+    const productNotice = getProductNotice(oliveyoungCategory, cleanedName, effectiveBrand);
 
     const thumbList = Array.isArray(optionThumbnailUploads) ? optionThumbnailUploads : [];
     const sharedList = Array.isArray(sharedOptionalUploads) ? sharedOptionalUploads : [];
+
+    const attrList = Array.isArray(productAttributes) && productAttributes.length > 0
+      ? productAttributes.map((a) => ({ ...a }))
+      : [];
 
     const specificProducts = allOpts.map((opt, index) => {
       let optName = sanitizeValueName((opt.name || opt.optionName || '').trim());
@@ -269,41 +288,95 @@ module.exports = async function handler(req, res) {
           naverShoppingRegistration: true,
           channelProductDisplayStatusType: 'ON',
         },
+        ...(attrList.length > 0
+          ? { productAttributes: attrList.map((a) => ({ ...a })) }
+          : {}),
       };
     });
 
-    const payload = {
-      groupProduct: {
-        leafCategoryId: String(categoryId),
-        name: cleanedName,
-        guideId,
-        brandName: brand || undefined,
-        taxType: 'TAX',
-        minorPurchasable: true,
-        productInfoProvidedNotice: productNotice,
-        afterServiceInfo: AFTER_SERVICE_INFO,
-        commonDetailContent: detailHtml,
-        smartstoreGroupChannel: {
-          naverShoppingRegistration: true,
-          channelProductDisplayStatusType: 'ON',
-        },
-        specificProducts,
+    const seoInfo = {};
+    if (sellerTags && sellerTags.length > 0) {
+      const recommendTags = sellerTags
+        .filter(t => t.code && t.code > 0 && (t.text || '').trim().length > 0)
+        .slice(0, 10)
+        .map(t => ({ code: t.code, text: t.text.substring(0, 15) }));
+      const directTags = sellerTags
+        .filter(t => !t.code || t.code === 0)
+        .filter(t => (t.text || '').trim().length >= 2)
+        .slice(0, Math.max(0, 10 - recommendTags.length))
+        .map(t => ({ text: t.text.substring(0, 15) }));
+      seoInfo.sellerTags = [...recommendTags, ...directTags];
+      console.log('[group-register] tags:', seoInfo.sellerTags.length, '(추천:', recommendTags.length, '직접:', directTags.length + ')');
+    }
+
+    const groupProductBody = {
+      leafCategoryId: String(categoryId),
+      name: cleanedName,
+      guideId,
+      ...(effectiveBrand ? { brandName: effectiveBrand } : {}),
+      taxType: 'TAX',
+      minorPurchasable: true,
+      productInfoProvidedNotice: productNotice,
+      afterServiceInfo: AFTER_SERVICE_INFO,
+      commonDetailContent: detailHtml,
+      ...(seoInfo.sellerTags?.length > 0 ? { seoInfo } : {}),
+      smartstoreGroupChannel: {
+        naverShoppingRegistration: true,
+        channelProductDisplayStatusType: 'ON',
       },
+      specificProducts,
     };
 
-    console.log('[group-register] name:', cleanedName,
+    if (effectiveBrand || effectiveManufacturer) {
+      groupProductBody.naverShoppingSearchInfo = {};
+      if (brandId) groupProductBody.naverShoppingSearchInfo.brandId = Number(brandId);
+      else if (effectiveBrand) groupProductBody.naverShoppingSearchInfo.brandName = effectiveBrand;
+      if (manufacturerId) groupProductBody.naverShoppingSearchInfo.manufacturerId = Number(manufacturerId);
+      else if (effectiveManufacturer) groupProductBody.naverShoppingSearchInfo.manufacturerName = effectiveManufacturer;
+      console.log('[group-register] brand:', effectiveBrand, '| manufacturer:', effectiveManufacturer);
+    }
+
+    if (attrList.length > 0) {
+      console.log('[group-register] attributes (per specificProduct):', attrList.length, '건 ×', specificProducts.length, '옵션');
+    }
+
+    const payload = { groupProduct: groupProductBody };
+
+    console.log('[group-register] leafCategoryId:', String(categoryId),
+      '| name:', cleanedName,
       '| options:', allOpts.length,
       '| guideId:', guideId,
       '| stdOptions:', stdOptions.map((o) => `${o.optionName}(${o.optionId})`).join(','));
 
-    const r = await proxyFetch(GROUP_PRODUCTS_URL, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload),
-    });
-    const text = await r.text();
-    let data;
-    try { data = JSON.parse(text); } catch { data = { raw: text }; }
+    let r, text, data;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      r = await proxyFetch(GROUP_PRODUCTS_URL, { method: 'POST', headers, body: JSON.stringify(payload) });
+      text = await r.text();
+      try { data = JSON.parse(text); } catch { data = { raw: text }; }
+
+      if (r.ok) break;
+
+      const tagError = (data?.invalidInputs || []).find(i =>
+        (i.type || '').includes('sellerTags') || (i.type || '').includes('recommendTags') ||
+        (i.name || '').includes('sellerTags') || (i.message || '').includes('태그')
+      );
+      if (!tagError || !payload.groupProduct.seoInfo?.sellerTags?.length) break;
+
+      const badMatch = (tagError.message || '').match(/[\(（]([^)）]+)[\)）]/);
+      const badWords = badMatch ? badMatch[1].split(',').map(s => s.trim().replace(/^태그명:\s*/, '')) : [];
+
+      if (badWords.length > 0) {
+        payload.groupProduct.seoInfo.sellerTags = payload.groupProduct.seoInfo.sellerTags.filter(
+          t => !badWords.some(bw => t.text === bw)
+        );
+        console.log('[group-register] 태그 제거 후 재시도 (#' + (attempt + 1) + '):', badWords.join(', '), '→ 남은', payload.groupProduct.seoInfo.sellerTags.length + '개');
+      } else {
+        payload.groupProduct.seoInfo.sellerTags = [];
+        console.log('[group-register] 태그 전체 제거 후 재시도 (#' + (attempt + 1) + ')');
+      }
+
+      if (!payload.groupProduct.seoInfo.sellerTags.length) delete payload.groupProduct.seoInfo;
+    }
 
     if (r.ok) {
       const progress = data.progress || data;
@@ -368,11 +441,13 @@ module.exports = async function handler(req, res) {
     }
 
     console.log('[group-register] FAILED:', r.status, text.substring(0, 500));
+    if (data?.invalidInputs) console.log('[group-register] invalidInputs:', JSON.stringify(data.invalidInputs));
 
     if (r.status === 400) {
       return res.status(200).json({
         success: false,
         error: data,
+        invalidInputs: data?.invalidInputs || null,
         fallbackToNormal: true,
         message: '그룹등록 실패 → 일반등록으로 전환',
         debug: {
@@ -383,7 +458,7 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    return res.status(r.status).json({ success: false, error: data, status: r.status });
+    return res.status(r.status).json({ success: false, error: data, invalidInputs: data?.invalidInputs || null, status: r.status });
   } catch (e) {
     console.error('[group-register] Error:', e.message, e.stack);
     return res.status(200).json({

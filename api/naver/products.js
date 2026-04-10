@@ -24,7 +24,7 @@ module.exports = async function handler(req, res) {
         const url = `${ORIGIN_PRODUCTS_URL}/${productNo}`;
         const r = await proxyFetch(url, { headers });
         const data = await r.json().catch(() => ({}));
-        return res.status(r.status).json({ success: r.ok, data });
+        return res.status(200).json({ success: r.ok, data, status: r.status });
       }
 
       const r = await proxyFetch(`${ORIGIN_PRODUCTS_URL}?page=${page}&size=50`, { headers });

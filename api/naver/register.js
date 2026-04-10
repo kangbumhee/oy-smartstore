@@ -24,9 +24,14 @@ function cleanProductName(rawName) {
 
   name = name.replace(/\(단품[\/]?기획\)/g, '');
   name = name.replace(/\(본품[+][^\)]*\)/g, '');
+  name = name.replace(/,?\s*FREE\s*\(One\s*size\)/gi, '');
+  name = name.replace(/,?\s*FREE$/gi, '');
+  name = name.replace(/,?\s*\(One\s*size\)/gi, '');
+  name = name.replace(/\d+COLOR\s*/gi, '');
+  name = name.replace(/,\s*$/, '');
 
   name = name.replace(/\s{2,}/g, ' ').trim();
-  name = name.replace(/^[\s\/]+|[\s\/]+$/g, '').trim();
+  name = name.replace(/^[\s\/,]+|[\s\/,]+$/g, '').trim();
 
   return name || rawName;
 }
@@ -77,7 +82,8 @@ module.exports = async function handler(req, res) {
   let body;
   try { body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body; } catch { return res.status(400).json({ error: 'Invalid JSON body' }); }
 
-  const { name, sellingPrice, categoryId, detailHtml, uploadedImages = [], options = [], stock = 999, brand = '', oliveyoungCategory = '' } = body;
+  const { name, sellingPrice, categoryId, detailHtml, uploadedImages = [], options = [], stock = 999, brand = '', oliveyoungCategory = '', sellerTags = [],
+    brandId, brandName, manufacturerId, manufacturerName, productAttributes = [] } = body;
   if (!name || !sellingPrice || !categoryId || !detailHtml) {
     return res.status(400).json({ error: 'name, sellingPrice, categoryId, detailHtml required' });
   }
@@ -114,6 +120,38 @@ module.exports = async function handler(req, res) {
       imageBlock.optionalImages = uploadedImages.slice(1, 5);
     }
 
+    if (sellerTags && sellerTags.length > 0) {
+      const recommendTags = sellerTags
+        .filter(t => t.code && t.code > 0 && (t.text || '').trim().length > 0)
+        .slice(0, 10)
+        .map(t => ({ code: t.code, text: t.text.substring(0, 15) }));
+      const directTags = sellerTags
+        .filter(t => !t.code || t.code === 0)
+        .filter(t => (t.text || '').trim().length >= 2)
+        .slice(0, Math.max(0, 10 - recommendTags.length))
+        .map(t => ({ text: t.text.substring(0, 15) }));
+      const allTags = [...recommendTags, ...directTags];
+      if (allTags.length > 0) {
+        if (!detailAttr.seoInfo) detailAttr.seoInfo = {};
+        detailAttr.seoInfo.sellerTags = allTags;
+        console.log('[register] tags:', allTags.length, '(추천:', recommendTags.length, '직접:', directTags.length + ')');
+      }
+    }
+
+    if (brandName || manufacturerName) {
+      detailAttr.naverShoppingSearchInfo = {};
+      if (brandId) detailAttr.naverShoppingSearchInfo.brandId = Number(brandId);
+      else if (brandName) detailAttr.naverShoppingSearchInfo.brandName = brandName;
+      if (manufacturerId) detailAttr.naverShoppingSearchInfo.manufacturerId = Number(manufacturerId);
+      else if (manufacturerName) detailAttr.naverShoppingSearchInfo.manufacturerName = manufacturerName;
+      console.log('[register] brand:', brandName, '(id:', brandId || 'none)', '| manufacturer:', manufacturerName, '(id:', manufacturerId || 'none)');
+    }
+
+    if (productAttributes && productAttributes.length > 0) {
+      detailAttr.productAttributes = productAttributes;
+      console.log('[register] attributes:', productAttributes.length, '건');
+    }
+
     const payload = {
       originProduct: {
         statusType: 'SALE',
@@ -137,15 +175,47 @@ module.exports = async function handler(req, res) {
       '| hasOptions:', hasOptions, '| stockQuantity:', hasOptions ? 0 : stock,
       hasOptions ? `combinations: ${optionInfo.optionCombinations.length}` : '');
 
-    const registerRes = await proxyFetch(PRODUCT_URL, { method: 'POST', headers, body: JSON.stringify(payload) });
-    const text = await registerRes.text();
-    let data;
-    try { data = JSON.parse(text); } catch { data = { raw: text }; }
+    for (let attempt = 0; attempt < 4; attempt++) {
+      let registerRes = await proxyFetch(PRODUCT_URL, { method: 'POST', headers, body: JSON.stringify(payload) });
+      let text = await registerRes.text();
+      let data;
+      try { data = JSON.parse(text); } catch { data = { raw: text }; }
 
-    if (registerRes.ok) return res.status(200).json({ success: true, result: data });
+      if (registerRes.ok) return res.status(200).json({ success: true, result: data });
 
-    console.log('[register] FAILED:', registerRes.status, text.substring(0, 500));
-    return res.status(registerRes.status).json({ success: false, error: data, status: registerRes.status });
+      const tagError = (data?.invalidInputs || []).find(i =>
+        (i.type || '').includes('sellerTags') || (i.type || '').includes('recommendTags') ||
+        (i.name || '').includes('sellerTags') || (i.message || '').includes('태그')
+      );
+
+      if (!tagError || !detailAttr.seoInfo?.sellerTags?.length) {
+        console.log('[register] FAILED:', registerRes.status, text.substring(0, 500));
+        return res.status(registerRes.status).json({
+          success: false, error: data, invalidInputs: data?.invalidInputs || null, status: registerRes.status,
+        });
+      }
+
+      const badMatch = (tagError.message || '').match(/[\(（]([^)）]+)[\)）]/);
+      const badWords = badMatch ? badMatch[1].split(',').map(s => s.trim().replace(/^태그명:\s*/, '')) : [];
+
+      if (badWords.length > 0) {
+        detailAttr.seoInfo.sellerTags = detailAttr.seoInfo.sellerTags.filter(
+          t => !badWords.some(bw => t.text === bw)
+        );
+        console.log('[register] 태그 제거 후 재시도 (#' + (attempt + 1) + '):', badWords.join(', '), '→ 남은', detailAttr.seoInfo.sellerTags.length + '개');
+      } else {
+        console.log('[register] 태그 전체 제거 후 재시도 (#' + (attempt + 1) + ')');
+        detailAttr.seoInfo.sellerTags = [];
+      }
+
+      if (!detailAttr.seoInfo.sellerTags.length) {
+        delete detailAttr.seoInfo.sellerTags;
+        delete detailAttr.seoInfo;
+      }
+      payload.originProduct.detailAttribute = detailAttr;
+    }
+
+    return res.status(400).json({ success: false, error: '태그 재시도 초과' });
   } catch (e) {
     return res.status(500).json({ success: false, error: e.message });
   }
