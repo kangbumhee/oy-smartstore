@@ -67,6 +67,16 @@ const Register = {
     UI.showToast(`${indices.length}개 옵션 제거됨`, 'success');
   },
 
+  getCheckedOptionsForProduct(goodsNo, options = []) {
+    const checkedIndices = Array.from(document.querySelectorAll('.opt-check:checked'))
+      .filter((cb) => cb.dataset.goodsNo === String(goodsNo))
+      .map((cb) => parseInt(cb.dataset.optIdx, 10))
+      .filter((idx) => Number.isInteger(idx) && options[idx] !== undefined);
+
+    if (checkedIndices.length === 0) return [];
+    return checkedIndices.map((idx) => ({ ...options[idx] }));
+  },
+
   startTimer() {
     this._startTime = Date.now();
     const timerEl = document.getElementById('progress-timer');
@@ -862,11 +872,13 @@ const Register = {
       }
     }
 
-    let opts = allOpts;
+    const checkedOpts = this.getCheckedOptionsForProduct(goodsNo, allOpts);
+    let opts = checkedOpts.length > 0 ? checkedOpts : allOpts.map((o) => ({ ...o }));
     if (opts.length > 0) {
+      if (checkedOpts.length > 0) {
+        UI.showToast(`선택한 옵션 ${checkedOpts.length}개만 등록합니다`, 'info', 1800);
+      }
       opts = await this.showStockPopup(opts, product);
-      product.options = opts;
-      Storage.updateQueueItem(goodsNo, { options: opts });
     }
     calc = Margin.calculate(Margin.resolveProductPrice(product, opts), marginRate);
 
@@ -959,7 +971,7 @@ const Register = {
           brand: product.brand,
           price: calc.sellingPrice,
           category: oyCategory,
-          options: product.options || [],
+          options: opts,
           reviewCount: product.reviewCount || 0,
           avgRating: product.avgRating || 0,
           imageUrls: [],
