@@ -196,7 +196,12 @@ const Search = {
           product.options = modalOptions;
           console.log(`[enrich] ${product.goodsNo} → 팝업/수동 성공: ${modalOptions.length}개`);
         }
-      } catch { /* user cancelled */ }
+      } catch (e) {
+        if (e?.message === 'cancelled') return null;
+        console.error('[enrich] OptionModal 실패:', e);
+        UI.showToast('옵션 불러오기에 실패해 대기열 추가를 중단했습니다', 'error');
+        return null;
+      }
     }
 
     this.cachedProducts[product.goodsNo] = product;
@@ -209,6 +214,10 @@ const Search = {
 
     UI.showToast('상품 정보 가져오는 중...', 'info', 2000);
     product = await this.enrichProduct(product);
+    if (!product) {
+      UI.showToast('옵션 선택이 취소되어 대기열에 추가하지 않았습니다', 'info');
+      return;
+    }
 
     const settings = Storage.getSettings();
     product.marginRate = settings.marginRate || 15;
@@ -228,6 +237,10 @@ const Search = {
     if (!product) return;
 
     product = await this.enrichProduct(product);
+    if (!product) {
+      UI.showToast('옵션 선택이 취소되어 대기열에 추가하지 않았습니다', 'info');
+      return;
+    }
     product.marginRate = rangeEl ? parseInt(rangeEl.value, 10) : 15;
     const added = Storage.addToQueue(product);
     if (added) {

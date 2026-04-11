@@ -128,32 +128,26 @@ const Register = {
   showStockPopup(opts, product) {
     return new Promise((resolve) => {
       const isSoldOutFlag = (o) => o.soldOut === true || o.soldOutFlag === 'Y';
-      const rows = opts.map((o, i) => {
-        const isSoldOut = isSoldOutFlag(o);
-        const stock = isSoldOut ? 0 : parseInt(o.quantity || o.stockQuantity || 999, 10);
-        const rowStyle = isSoldOut ? 'background:#fff5f5;' : '';
-        const soldOutBadge = isSoldOut ? ' <span style="color:#dc2626;font-size:11px;font-weight:600;">(품절)</span>' : '';
-        const optLabel = this._escHtml(o.name || o.optionName || '옵션' + (i + 1));
-        const borderColor = isSoldOut ? '#fca5a5' : '#ddd';
-        return `<tr style="${rowStyle}">
-          <td style="padding:6px 8px;font-size:13px;">${optLabel}${soldOutBadge}</td>
-          <td style="padding:6px 8px;text-align:right;font-size:13px;">${o.price ? o.price.toLocaleString() + '원' : '-'}</td>
-          <td style="padding:6px 4px;text-align:center;">
-            <input type="number" class="stock-input" data-idx="${i}"
-              value="${stock}" min="0" max="9999"
-              style="width:60px;padding:4px;border:1px solid ${borderColor};border-radius:4px;text-align:center;font-size:13px;" />
-          </td>
-        </tr>`;
-      }).join('');
-
-      const hasSoldOut = opts.some((o) => isSoldOutFlag(o));
-      const soldOutHint = hasSoldOut
-        ? '<br><span style="color:#dc2626;font-size:12px;">⚠ 품절 옵션은 재고 0으로 표시됩니다. 재입고 시 재고를 입력하세요.</span>'
-        : '';
+      const workingOpts = (Array.isArray(opts) ? opts : []).map((o) => ({ ...o }));
+      const getStockValue = (o) => {
+        const rawStock = parseInt(o.stockQuantity ?? o.quantity ?? (isSoldOutFlag(o) ? 0 : 999), 10);
+        return Number.isFinite(rawStock) ? Math.max(0, rawStock) : 0;
+      };
+      const syncStocksFromInputs = () => {
+        document.querySelectorAll('#stock-popup-body .stock-input').forEach((inp) => {
+          const idx = parseInt(inp.dataset.idx, 10);
+          if (!workingOpts[idx]) return;
+          const newStock = Math.max(0, parseInt(inp.value, 10) || 0);
+          workingOpts[idx].stockQuantity = newStock;
+          workingOpts[idx].quantity = newStock;
+          workingOpts[idx].soldOut = newStock <= 0;
+          if (workingOpts[idx].soldOutFlag !== undefined) workingOpts[idx].soldOutFlag = newStock > 0 ? 'N' : 'Y';
+        });
+      };
 
       UI.showModal(`
         <h3 style="margin:0 0 12px;">옵션 재고 확인</h3>
-        <p style="font-size:13px;color:#666;margin:0 0 12px;">${this._escHtml(product.name)} — 옵션 ${opts.length}개${soldOutHint}</p>
+        <p id="stock-popup-summary" style="font-size:13px;color:#666;margin:0 0 12px;"></p>
         <div style="max-height:300px;overflow-y:auto;">
           <table style="width:100%;border-collapse:collapse;">
             <thead><tr style="background:#f1f5f9;">
@@ -161,7 +155,7 @@ const Register = {
               <th style="padding:6px 8px;text-align:right;font-size:12px;">가격</th>
               <th style="padding:6px 4px;text-align:center;font-size:12px;">재고</th>
             </tr></thead>
-            <tbody>${rows}</tbody>
+            <tbody id="stock-popup-body"></tbody>
           </table>
         </div>
         <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
@@ -170,24 +164,72 @@ const Register = {
         </div>
       `);
 
-      document.getElementById('stock-popup-confirm').onclick = () => {
-        document.querySelectorAll('.stock-input').forEach((inp) => {
-          const idx = parseInt(inp.dataset.idx, 10);
-          if (opts[idx]) {
-            const newStock = Math.max(0, parseInt(inp.value, 10) || 0);
-            opts[idx].stockQuantity = newStock;
-            opts[idx].quantity = newStock;
-            if (newStock > 0) opts[idx].soldOut = false;
-            else {
-              opts[idx].soldOut = true;
-              if (opts[idx].soldOutFlag !== undefined) opts[idx].soldOutFlag = 'Y';
-            }
-          }
-        });
-        UI.hideModal();
-        resolve(opts);
+      const summaryEl = document.getElementById('stock-popup-summary');
+      const bodyEl = document.getElementById('stock-popup-body');
+      const renderRows = () => {
+        const hasSoldOut = workingOpts.some((o) => isSoldOutFlag(o));
+        const soldOutHint = hasSoldOut
+          ? '<br><span style="color:#dc2626;font-size:12px;">⚠ 품절 옵션은 재고 0으로 표시됩니다. 재입고 시 재고를 입력하세요.</span>'
+          : '';
+        if (summaryEl) {
+          summaryEl.innerHTML = `${this._escHtml(product.name)} — 옵션 ${workingOpts.length}개${soldOutHint}`;
+        }
+        if (!bodyEl) return;
+        bodyEl.innerHTML = workingOpts.map((o, i) => {
+          const isSoldOut = isSoldOutFlag(o);
+          const stock = getStockValue(o);
+          const rowStyle = isSoldOut ? 'background:#fff5f5;' : '';
+          const soldOutBadge = isSoldOut ? ' <span style="color:#dc2626;font-size:11px;font-weight:600;">(품절)</span>' : '';
+          const optLabel = this._escHtml(o.name || o.optionName || '옵션' + (i + 1));
+          const borderColor = isSoldOut ? '#fca5a5' : '#ddd';
+          const priceText = o.price ? o.price.toLocaleString() + '원' : '-';
+          return `<tr style="${rowStyle}">
+            <td style="padding:6px 8px;font-size:13px;">${optLabel}${soldOutBadge}</td>
+            <td style="padding:6px 8px;text-align:right;font-size:13px;">${priceText}</td>
+            <td style="padding:6px 4px;text-align:center;">
+              <div style="display:flex;align-items:center;justify-content:center;gap:6px;">
+                <input type="number" class="stock-input" data-idx="${i}"
+                  value="${stock}" min="0" max="9999"
+                  style="width:60px;padding:4px;border:1px solid ${borderColor};border-radius:4px;text-align:center;font-size:13px;" />
+                <button type="button" class="stock-remove-btn" data-idx="${i}"
+                  title="이 옵션 제외"
+                  style="width:28px;height:28px;border:1px solid #fecaca;background:#fff1f2;color:#dc2626;border-radius:6px;font-size:14px;font-weight:700;cursor:pointer;line-height:1;">
+                  ×
+                </button>
+              </div>
+            </td>
+          </tr>`;
+        }).join('');
       };
-      document.getElementById('stock-popup-skip').onclick = () => { UI.hideModal(); resolve(opts); };
+
+      if (bodyEl) {
+        bodyEl.addEventListener('click', (e) => {
+          const removeBtn = e.target.closest('.stock-remove-btn');
+          if (!removeBtn) return;
+          if (workingOpts.length <= 1) {
+            UI.showToast('옵션은 최소 1개 이상 남겨주세요', 'info');
+            return;
+          }
+          syncStocksFromInputs();
+          const idx = parseInt(removeBtn.dataset.idx, 10);
+          if (!Number.isInteger(idx) || !workingOpts[idx]) return;
+          workingOpts.splice(idx, 1);
+          renderRows();
+          UI.showToast('옵션 1개를 제외했습니다', 'info', 1500);
+        });
+      }
+
+      renderRows();
+
+      document.getElementById('stock-popup-confirm').onclick = () => {
+        syncStocksFromInputs();
+        UI.hideModal();
+        resolve(workingOpts);
+      };
+      document.getElementById('stock-popup-skip').onclick = () => {
+        UI.hideModal();
+        resolve(workingOpts);
+      };
     });
   },
 
@@ -344,11 +386,23 @@ const Register = {
           Storage.updateQueueItem(goodsNo, { options: mo });
           allOpts = mo;
         }
-      } catch { /* cancelled */ }
+      } catch (e) {
+        if (e?.message === 'cancelled') {
+          UI.showToast('옵션 선택이 취소되어 등록을 중단했습니다', 'info');
+          return;
+        }
+        console.error('[registerOne] OptionModal 실패:', e);
+        UI.showToast('옵션 불러오기에 실패해 등록을 중단했습니다', 'error');
+        return;
+      }
     }
 
     let opts = allOpts;
-    if (opts.length > 0) opts = await this.showStockPopup(opts, product);
+    if (opts.length > 0) {
+      opts = await this.showStockPopup(opts, product);
+      product.options = opts;
+      Storage.updateQueueItem(goodsNo, { options: opts });
+    }
 
     const optCount = opts.length;
     const settings = Storage.getSettings();
