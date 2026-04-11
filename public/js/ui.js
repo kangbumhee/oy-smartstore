@@ -187,8 +187,19 @@ const UI = {
     document.getElementById('modal-overlay').style.display = 'none';
   },
 
-  showProgress(steps) {
-    const html = `<div class="progress-timer" id="progress-timer">0초 경과</div>` + steps.map((s, i) => `
+  showProgress(steps, context = {}) {
+    const productName = String(context.productName || '').trim();
+    const optionNames = Array.isArray(context.optionNames) ? context.optionNames.filter(Boolean) : [];
+    const selectedLabel = context.selectedOnly ? `선택 옵션 ${optionNames.length}개` : (optionNames.length > 0 ? `옵션 ${optionNames.length}개` : '');
+    const summaryHtml = productName || optionNames.length > 0 ? `
+      <div style="margin:0 0 14px;padding:10px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;">
+        ${productName ? `<div style="font-size:14px;font-weight:700;color:#1e293b;line-height:1.45;word-break:break-word;">${this._escHtml(productName)}</div>` : ''}
+        ${selectedLabel ? `<div style="margin-top:${productName ? '6px' : '0'};font-size:12px;color:#6366f1;font-weight:600;">${this._escHtml(selectedLabel)}</div>` : ''}
+        ${optionNames.length > 0 ? `<div style="margin-top:8px;font-size:12px;color:#475569;line-height:1.6;max-height:92px;overflow:auto;">${optionNames.map((name) => `<span style="display:inline-block;margin:0 6px 6px 0;padding:3px 8px;border-radius:999px;background:#eef2ff;border:1px solid #c7d2fe;">${this._escHtml(name)}</span>`).join('')}</div>` : ''}
+      </div>
+    ` : '';
+
+    const html = `${summaryHtml}<div class="progress-timer" id="progress-timer">0초 경과</div>` + steps.map((s, i) => `
       <div class="progress-step" id="step-${i}">
         <div class="step-icon ${s.status}">${s.status === 'done' ? '✓' : s.status === 'error' ? '✗' : s.status === 'active' ? '⏳' : (i + 1)}</div>
         <span>${s.label}</span>

@@ -625,7 +625,11 @@ const Register = {
     UI.showProgress([
       { status: 'active', label: '저장된 이미지/설명 재사용 중...' },
       { status: 'wait', label: '스마트스토어 재등록 중...' },
-    ]);
+    ], {
+      productName: ctx.name || queueProduct.name || goodsNo,
+      optionNames: Array.isArray(ctx.options) ? ctx.options.map((opt) => (opt.name || opt.optionName || '').trim()).filter(Boolean) : [],
+      selectedOnly: Array.isArray(ctx.options) && ctx.options.length > 0,
+    });
     this.startTimer();
 
     try {
@@ -907,7 +911,11 @@ const Register = {
       { label: '② 이미지 업로드 중...', status: 'pending' },
       { label: `③ 스마트스토어 등록 중... ${optCount > 0 ? `(옵션 ${optCount}개)` : ''}`, status: 'pending' },
     ];
-    UI.showProgress(steps);
+    UI.showProgress(steps, {
+      productName: product.name || cleanedBaseName,
+      optionNames: opts.map((opt) => (opt.name || opt.optionName || '').trim()).filter(Boolean),
+      selectedOnly: checkedOpts.length > 0,
+    });
     this.startTimer();
 
     try {
