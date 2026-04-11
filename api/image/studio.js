@@ -24,6 +24,7 @@ module.exports = async function handler(req, res) {
     prompt: customPrompt,
     thumbnailPrompt: rawThumbnailPrompt,
     thumbnail,
+    thumbnailList: rawThumbnailList,
     thumbnailCount: rawThumbnailCount,
     thumbnailOptions,
   } = body;
@@ -35,20 +36,32 @@ module.exports = async function handler(req, res) {
   const startTime = Date.now();
 
   try {
-    let referenceImages = null;
-    if (thumbnail && String(thumbnail).trim().startsWith('http')) {
-      const imgData = await fetchImageAsBase64(String(thumbnail).trim());
-      if (imgData) {
-        referenceImages = [imgData];
-        console.log('[studio] 참조이미지 로드 성공:', String(thumbnail).substring(0, 80));
-      }
-    }
+    const imageCache = new Map();
+    const loadReferenceImages = async (url) => {
+      const normalized = String(url || '').trim();
+      if (!normalized || !normalized.startsWith('http')) return null;
+      if (imageCache.has(normalized)) return imageCache.get(normalized);
 
-    const prompts = [];
+      const imagePromise = fetchImageAsBase64(normalized).then((imgData) => {
+        if (imgData) {
+          console.log('[studio] 참조이미지 로드 성공:', normalized.substring(0, 120));
+          return [imgData];
+        }
+        return null;
+      });
+      imageCache.set(normalized, imagePromise);
+      return imagePromise;
+    };
+
+    const sharedReferenceImages = await loadReferenceImages(thumbnail);
+    const thumbnailList = Array.isArray(rawThumbnailList)
+      ? rawThumbnailList.map((value) => String(value || '').trim()).filter(Boolean)
+      : [];
+    const promptJobs = [];
     const numTotal = Math.min(Math.max(1, parseInt(count, 10) || 1), 8);
     const optNames = Array.isArray(thumbnailOptions) ? thumbnailOptions : [];
 
-    const hasRef = !!(referenceImages && referenceImages.length > 0);
+    const hasRef = !!(sharedReferenceImages && sharedReferenceImages.length > 0) || thumbnailList.length > 0;
 
     const mainPrompt = customPrompt
       ? ensureProductContext(customPrompt, productName, brand)
@@ -66,41 +79,59 @@ module.exports = async function handler(req, res) {
         numTotal,
         5
       );
-      for (let i = 0; i < numThumbs && prompts.length < numTotal; i++) {
+      for (let i = 0; i < numThumbs && promptJobs.length < numTotal; i++) {
         let p = baseThumb || mainPrompt;
         if (baseThumb && optNames[i]) {
           const v = String(optNames[i]).substring(0, 120).replace(/"/g, "'");
           p = `${baseThumb} The specific variant shown is "${v}".`;
         }
-        prompts.push(p.substring(0, 2000));
+        const promptReferenceImages = await loadReferenceImages(thumbnailList[i]) || sharedReferenceImages;
+        promptJobs.push({
+          prompt: p.substring(0, 2000),
+          referenceImages: promptReferenceImages,
+        });
       }
-      while (prompts.length < numTotal) {
-        prompts.push(mainPrompt);
+      while (promptJobs.length < numTotal) {
+        promptJobs.push({
+          prompt: mainPrompt,
+          referenceImages: sharedReferenceImages,
+        });
       }
     } else {
       const numMain = Math.min(numTotal, 5);
       const thumbPrompt = baseThumb;
       for (let i = 0; i < numMain; i++) {
         if (i === 0 && thumbPrompt) {
-          prompts.push(thumbPrompt);
+          promptJobs.push({
+            prompt: thumbPrompt,
+            referenceImages: sharedReferenceImages,
+          });
         } else {
-          prompts.push(mainPrompt);
+          promptJobs.push({
+            prompt: mainPrompt,
+            referenceImages: sharedReferenceImages,
+          });
         }
       }
       if (options && Array.isArray(options) && options.length > 1) {
         for (const opt of options.slice(0, 2)) {
-          if (opt.soldOut || prompts.length >= 5) continue;
+          if (opt.soldOut || promptJobs.length >= 5) continue;
           const optName = opt.name || opt.optionName || '';
           if (!optName) continue;
-          prompts.push(buildPrompt(productName, brand, category, optName, hasRef));
+          promptJobs.push({
+            prompt: buildPrompt(productName, brand, category, optName, hasRef),
+            referenceImages: sharedReferenceImages,
+          });
         }
       }
     }
 
-    console.log(`[studio] Generating ${prompts.length} images, ref=${referenceImages ? referenceImages.length : 0}, prompt length: ${prompts[0]?.length || 0}`);
+    console.log(
+      `[studio] Generating ${promptJobs.length} images, sharedRef=${sharedReferenceImages ? sharedReferenceImages.length : 0}, variantRefs=${thumbnailList.length}, prompt length: ${promptJobs[0]?.prompt?.length || 0}`
+    );
 
     const results = await Promise.allSettled(
-      prompts.map((p) => callEccoAPI(eccoKey, p, referenceImages))
+      promptJobs.map((job) => callEccoAPI(eccoKey, job.prompt, job.referenceImages))
     );
 
     const images = [];

@@ -83,6 +83,19 @@ const Register = {
     return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
   },
 
+  _toHighResImage(url) {
+    if (!url) return '';
+    try {
+      const parsed = new URL(String(url), window.location.origin);
+      parsed.searchParams.set('RS', '2000x0');
+      parsed.searchParams.set('QT', '95');
+      return parsed.toString();
+    } catch {
+      const separator = String(url).includes('?') ? '&' : '?';
+      return `${url}${separator}RS=2000x0&QT=95`;
+    }
+  },
+
   cleanProductName(rawName) {
     if (!rawName) return rawName;
     let name = rawName;
@@ -384,6 +397,10 @@ const Register = {
       const sharedImageCount = Math.max(0, imgCount - 1);
       const totalThumbnails = opts.length > 1 ? Math.min(opts.length, 5) : 1;
       const genCount = Math.min(sharedImageCount + totalThumbnails, 8);
+      const optionThumbnailList = opts.length > 1
+        ? opts.slice(0, totalThumbnails).map((o) => this._toHighResImage(o.image || product.thumbnail)).filter(Boolean)
+        : [];
+      const primaryThumbnail = optionThumbnailList[0] || this._toHighResImage(product.thumbnail || '');
 
       const tokenP = API.obtainNaverToken(15);
 
@@ -396,7 +413,8 @@ const Register = {
           count: genCount,
           prompt: customPrompt || undefined,
           thumbnailPrompt,
-          thumbnail: product.thumbnail || undefined,
+          thumbnail: primaryThumbnail || undefined,
+          thumbnailList: optionThumbnailList.length > 0 ? optionThumbnailList : undefined,
           thumbnailCount: totalThumbnails,
           thumbnailOptions: opts.length > 1
             ? opts.slice(0, totalThumbnails).map((o) => (o.name || o.optionName || '').trim()).filter(Boolean)
