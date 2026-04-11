@@ -174,10 +174,10 @@ module.exports = async function handler(req, res) {
   }
 
   const allOpts = options || [];
-  if (allOpts.length < 2) {
+  if (allOpts.length < 1) {
     return res.status(200).json({
       success: false,
-      error: '그룹상품은 2개 이상의 옵션이 필요합니다.',
+      error: '그룹상품 등록용 옵션이 없습니다.',
       fallbackToNormal: true,
     });
   }
