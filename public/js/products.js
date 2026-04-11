@@ -602,7 +602,7 @@ const Products = {
         return true;
       }
 
-      const oyOptions = await this._getOliveYoungOptions(goodsNo, false, !options.silent);
+      const oyOptions = await this._getOliveYoungOptions(goodsNo, !options.silent, !options.silent);
       if (oyOptions.length === 0) {
         if (!options.silent) UI.showToast('올리브영에서 옵션을 가져올 수 없습니다', 'error');
         return false;
@@ -666,9 +666,17 @@ const Products = {
       const url = `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${encodeURIComponent(goodsNo)}&autoFetch=true`;
       const popup = window.open(url, 'oy_sync_' + goodsNo, 'width=800,height=600');
       let checkClosed = null;
+      let closeDetectedAt = 0;
+      let settled = false;
       const cleanup = () => { if (checkClosed) clearInterval(checkClosed); checkClosed = null; };
 
+      if (!popup) {
+        reject(new Error('올리브영 팝업이 차단되었습니다'));
+        return;
+      }
+
       const timeout = setTimeout(() => {
+        settled = true;
         window.removeEventListener('message', handler);
         cleanup();
         if (popup && !popup.closed) popup.close();
@@ -679,6 +687,7 @@ const Products = {
         if (event.origin !== 'https://www.oliveyoung.co.kr') return;
         const data = event.data;
         if (data && data.type === 'oy-options-result' && data.goodsNo === goodsNo) {
+          settled = true;
           clearTimeout(timeout);
           window.removeEventListener('message', handler);
           cleanup();
@@ -689,7 +698,16 @@ const Products = {
       }
       window.addEventListener('message', handler);
       checkClosed = setInterval(() => {
-        if (popup && popup.closed) {
+        if (settled || !popup) return;
+        if (popup.closed) {
+          if (!closeDetectedAt) {
+            closeDetectedAt = Date.now();
+            return;
+          }
+          if (Date.now() - closeDetectedAt < 1500) {
+            return;
+          }
+          settled = true;
           clearTimeout(timeout);
           window.removeEventListener('message', handler);
           cleanup();

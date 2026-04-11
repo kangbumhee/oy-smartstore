@@ -48,6 +48,12 @@ const Margin = {
   formatPrice(n) {
     return Number(n).toLocaleString('ko-KR') + '원';
   },
+
+  getDisplayProfit(calc) {
+    const estimated = Number(calc?.estimatedNetProfit);
+    if (Number.isFinite(estimated)) return estimated;
+    return Number(calc?.totalProfit || 0);
+  },
 };
 
 (function initCalcPage() {
@@ -61,7 +67,7 @@ const Margin = {
   function update() {
     const r = Margin.calculate(oyInput.value, rangeInput.value);
     sellingEl.textContent = Margin.formatPrice(r.sellingPrice);
-    profitEl.textContent = Margin.formatPrice(r.totalProfit);
+    profitEl.textContent = Margin.formatPrice(Margin.getDisplayProfit(r));
     shippingProfitEl.textContent = r.oyShippingFree
       ? `+${Margin.formatPrice(r.shippingProfit)} (OY무료배송)`
       : `+${Margin.formatPrice(r.shippingProfit)}`;

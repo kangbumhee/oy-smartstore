@@ -1,6 +1,7 @@
 const { getAccessToken, getAuthHeadersFromToken, resolveCredentials, resolveToken, proxyFetch, NAVER_API_BASE } = require('../../lib/naver-auth');
 
-const ORIGIN_PRODUCTS_URL = `${NAVER_API_BASE}/v2/products/origin-products`;
+const ORIGIN_PRODUCTS_V2_URL = `${NAVER_API_BASE}/v2/products/origin-products`;
+const ORIGIN_PRODUCTS_V1_URL = `${NAVER_API_BASE}/v1/products/origin-products`;
 
 async function parseResponseBody(response) {
   const text = await response.text();
@@ -26,13 +27,13 @@ module.exports = async function handler(req, res) {
       const { productNo, page = '1' } = req.query || {};
 
       if (productNo) {
-        const url = `${ORIGIN_PRODUCTS_URL}/${productNo}`;
+        const url = `${ORIGIN_PRODUCTS_V2_URL}/${productNo}`;
         const r = await proxyFetch(url, { headers });
         const data = await r.json().catch(() => ({}));
         return res.status(200).json({ success: r.ok, data, status: r.status });
       }
 
-      const r = await proxyFetch(`${ORIGIN_PRODUCTS_URL}?page=${page}&size=50`, { headers });
+      const r = await proxyFetch(`${ORIGIN_PRODUCTS_V2_URL}?page=${page}&size=50`, { headers });
       const data = await r.json().catch(() => ({}));
       return res.status(r.status).json({ success: r.ok, data });
     }
@@ -48,7 +49,7 @@ module.exports = async function handler(req, res) {
         if (!optionCombinations || optionCombinations.length === 0) {
           return res.status(400).json({ error: 'optionCombinations required for syncStock' });
         }
-        const url = `${ORIGIN_PRODUCTS_URL}/${productNo}/option-stock`;
+        const url = `${ORIGIN_PRODUCTS_V1_URL}/${productNo}/option-stock`;
         const payload = { optionInfo: { optionCombinations } };
         if (useStockManagement !== undefined) payload.useStockManagement = useStockManagement;
 
@@ -60,7 +61,7 @@ module.exports = async function handler(req, res) {
         return res.status(r.status).json({ success: r.ok, data });
       }
 
-      const url = `${ORIGIN_PRODUCTS_URL}/${productNo}`;
+      const url = `${ORIGIN_PRODUCTS_V2_URL}/${productNo}`;
       const payload = { originProduct: {} };
 
       if (body.action === 'pause') {
@@ -125,7 +126,7 @@ module.exports = async function handler(req, res) {
       if (!productNo) return res.status(400).json({ error: 'productNo required' });
 
       if (optionCombinations && optionCombinations.length > 0) {
-        const url = `${ORIGIN_PRODUCTS_URL}/${productNo}/option-stock`;
+        const url = `${ORIGIN_PRODUCTS_V1_URL}/${productNo}/option-stock`;
         const payload = {
           optionInfo: {
             optionCombinations: optionCombinations,
@@ -151,7 +152,7 @@ module.exports = async function handler(req, res) {
       const { productNo } = req.query || {};
       if (!productNo) return res.status(400).json({ error: 'productNo query parameter required' });
 
-      const url = `${ORIGIN_PRODUCTS_URL}/${productNo}`;
+      const url = `${ORIGIN_PRODUCTS_V2_URL}/${productNo}`;
       const payload = {
         originProduct: {
           statusType: 'SUSPENSION',

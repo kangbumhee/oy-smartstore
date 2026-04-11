@@ -127,7 +127,7 @@ const Search = {
             </div>
           </div>
           <div class="modal-selling-price" id="modal-selling-price">${Margin.formatPrice(calc.sellingPrice)}</div>
-          <div class="modal-profit" id="modal-profit">예상 순이익: ${Margin.formatPrice(calc.totalProfit)}</div>
+          <div class="modal-profit" id="modal-profit">예상 순이익: ${Margin.formatPrice(Margin.getDisplayProfit(calc))}</div>
           ${optionsHtml}
           <div class="modal-actions">
             <button class="btn btn-primary" onclick="Search.addToQueueFromModal('${goodsNo}')">등록 대기열에 추가</button>
@@ -147,7 +147,7 @@ const Search = {
     function updateModal() {
       const c = Margin.calculate(Margin.resolveProductPrice(product, product.options), rangeEl.value);
       priceEl.textContent = Margin.formatPrice(c.sellingPrice);
-      profitEl.textContent = `예상 순이익: ${Margin.formatPrice(c.totalProfit)}`;
+      profitEl.textContent = `예상 순이익: ${Margin.formatPrice(Margin.getDisplayProfit(c))}`;
     }
 
     rangeEl.addEventListener('input', () => { numEl.value = rangeEl.value; updateModal(); });

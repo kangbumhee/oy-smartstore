@@ -30,7 +30,7 @@ const Register = {
     const profitEl = document.getElementById(`queue-profit-${goodsNo}`);
     const numEl = document.getElementById(`queue-margin-num-${goodsNo}`);
     if (sellingEl) sellingEl.textContent = Margin.formatPrice(calc.sellingPrice);
-    if (profitEl) profitEl.textContent = Margin.formatPrice(calc.totalProfit);
+    if (profitEl) profitEl.textContent = Margin.formatPrice(Margin.getDisplayProfit(calc));
     if (numEl) numEl.value = marginRate;
   },
 

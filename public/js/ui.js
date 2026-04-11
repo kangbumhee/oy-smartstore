@@ -113,7 +113,7 @@ const UI = {
               </div>
               <div class="price-box">
                 <span class="label">예상 순이익</span>
-                <span class="value profit" id="queue-profit-${product.goodsNo}">${Margin.formatPrice(calc.totalProfit)}</span>
+                <span class="value profit" id="queue-profit-${product.goodsNo}">${Margin.formatPrice(Margin.getDisplayProfit(calc))}</span>
               </div>
             </div>
             <div class="margin-control">
