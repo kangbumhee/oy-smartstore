@@ -655,9 +655,19 @@ const Products = {
       if (matched) {
         const stock = this._getOptionStock(matched);
         const soldOut = this._isSoldOutOption(matched);
-        return { id: combo.id, optionName1: combo.optionName1, stockQuantity: soldOut ? 0 : Math.min(stock, 999), price: combo.price || 0, usable: !soldOut };
+        return {
+          id: combo.id,
+          optionName1: combo.optionName1,
+          stockQuantity: soldOut ? 0 : Math.min(stock, 999),
+          usable: !soldOut,
+        };
       }
-      return { id: combo.id, optionName1: combo.optionName1, stockQuantity: combo.stockQuantity || 0, price: combo.price || 0, usable: combo.usable !== false };
+      return {
+        id: combo.id,
+        optionName1: combo.optionName1,
+        stockQuantity: combo.stockQuantity || 0,
+        usable: combo.usable !== false,
+      };
     });
   },
 

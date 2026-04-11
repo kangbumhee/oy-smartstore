@@ -50,14 +50,20 @@ module.exports = async function handler(req, res) {
           return res.status(400).json({ error: 'optionCombinations required for syncStock' });
         }
         const url = `${ORIGIN_PRODUCTS_V1_URL}/${productNo}/option-stock`;
-        const payload = { optionInfo: { optionCombinations } };
+        const sanitizedOptionCombinations = optionCombinations.map((item) => ({
+          id: item?.id,
+          optionName1: item?.optionName1,
+          stockQuantity: Number(item?.stockQuantity || 0),
+          usable: item?.usable !== false,
+        }));
+        const payload = { optionInfo: { optionCombinations: sanitizedOptionCombinations } };
         if (useStockManagement !== undefined) payload.useStockManagement = useStockManagement;
 
         const r = await proxyFetch(url, { method: 'PUT', headers, body: JSON.stringify(payload) });
         const text = await r.text();
         let data;
         try { data = JSON.parse(text); } catch { data = { raw: text }; }
-        console.log(`[option-stock] productNo=${productNo} options=${optionCombinations.length} status=${r.status}`);
+        console.log(`[option-stock] productNo=${productNo} options=${sanitizedOptionCombinations.length} status=${r.status}`);
         return res.status(r.status).json({ success: r.ok, data });
       }
 
@@ -127,9 +133,15 @@ module.exports = async function handler(req, res) {
 
       if (optionCombinations && optionCombinations.length > 0) {
         const url = `${ORIGIN_PRODUCTS_V1_URL}/${productNo}/option-stock`;
+        const sanitizedOptionCombinations = optionCombinations.map((item) => ({
+          id: item?.id,
+          optionName1: item?.optionName1,
+          stockQuantity: Number(item?.stockQuantity || 0),
+          usable: item?.usable !== false,
+        }));
         const payload = {
           optionInfo: {
-            optionCombinations: optionCombinations,
+            optionCombinations: sanitizedOptionCombinations,
           },
         };
         if (useStockManagement !== undefined) {
@@ -141,7 +153,7 @@ module.exports = async function handler(req, res) {
         let data;
         try { data = JSON.parse(text); } catch { data = { raw: text }; }
 
-        console.log(`[option-stock] productNo=${productNo} options=${optionCombinations.length} status=${r.status}`);
+        console.log(`[option-stock] productNo=${productNo} options=${sanitizedOptionCombinations.length} status=${r.status}`);
         return res.status(r.status).json({ success: r.ok, data });
       }
 
