@@ -58,7 +58,7 @@ module.exports = async function handler(req, res) {
       ? rawThumbnailList.map((value) => String(value || '').trim()).filter(Boolean)
       : [];
     const promptJobs = [];
-    const numTotal = Math.min(Math.max(1, parseInt(count, 10) || 1), 8);
+    const numTotal = Math.min(Math.max(1, parseInt(count, 10) || 1), 20);
     const optNames = Array.isArray(thumbnailOptions) ? thumbnailOptions : [];
 
     const hasRef = !!(sharedReferenceImages && sharedReferenceImages.length > 0) || thumbnailList.length > 0;
@@ -76,8 +76,7 @@ module.exports = async function handler(req, res) {
     if (hasThumbCountParam) {
       const numThumbs = Math.min(
         Math.max(1, parseInt(rawThumbnailCount, 10) || 1),
-        numTotal,
-        5
+        numTotal
       );
       for (let i = 0; i < numThumbs && promptJobs.length < numTotal; i++) {
         let p = baseThumb || mainPrompt;

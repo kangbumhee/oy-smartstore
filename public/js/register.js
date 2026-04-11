@@ -929,11 +929,11 @@ const Register = {
       const imgCount = Math.max(1, Math.min(5, settings.imgCount || 1));
       const sharedImageCount = Math.max(0, imgCount - 1);
       const isOptionProduct = opts.length > 1;
-      const totalThumbnails = 1;
-      const genCount = imgCount;
       const optionThumbnailList = opts.length > 1
-        ? [this._toHighResImage((opts[0]?.image) || product.thumbnail)].filter(Boolean)
+        ? opts.map((o) => this._toHighResImage((o?.image) || product.thumbnail)).filter(Boolean)
         : [];
+      const totalThumbnails = isOptionProduct ? optionThumbnailList.length : 1;
+      const genCount = isOptionProduct ? (totalThumbnails + sharedImageCount) : imgCount;
       const primaryThumbnail = optionThumbnailList[0] || this._toHighResImage(product.thumbnail || '');
 
       const tokenP = API.obtainNaverToken(15);
@@ -1006,8 +1006,11 @@ const Register = {
         return;
       }
 
-      if (settings.thumbCropEnabled !== false && imageUrls[0]) {
-        imageUrls[0] = await this._cropImageBorder(imageUrls[0], settings.thumbCropPercent || 6);
+      if (settings.thumbCropEnabled !== false && imageUrls.length > 0) {
+        const cropCount = Math.min(totalThumbnails, imageUrls.length);
+        for (let i = 0; i < cropCount; i++) {
+          imageUrls[i] = await this._cropImageBorder(imageUrls[i], settings.thumbCropPercent || 6);
+        }
       }
 
       let descHtml = '';
@@ -1105,8 +1108,8 @@ const Register = {
         : '| 태그 없음';
 
       const naverImgUrls = uploadedImages.map((img) => img.url).filter(Boolean);
-      const thumbUploads = uploadedImages.slice(0, 1);
-      const sharedUploads = uploadedImages.slice(1, 1 + sharedImageCount);
+      const thumbUploads = uploadedImages.slice(0, totalThumbnails);
+      const sharedUploads = uploadedImages.slice(totalThumbnails, totalThumbnails + sharedImageCount);
 
       let imgsForDetailTop = naverImgUrls;
       if (isOptionProduct) {
