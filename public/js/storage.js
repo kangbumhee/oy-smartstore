@@ -71,6 +71,9 @@ const Storage = {
       marginRate: 15,
       autoCategory: true,
       autoDescription: true,
+      imgCount: 1,
+      thumbCropEnabled: true,
+      thumbCropPercent: 6,
     });
   },
 

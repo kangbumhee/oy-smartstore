@@ -378,6 +378,21 @@
               <span style="font-size:12px;color:var(--text-muted)">장 (1~5, 기본 1장 / $0.03/장)</span>
             </div>
           </div>
+          <div class="cred-row">
+            <label for="setting-thumb-crop-enabled">썸네일 테두리 자르기</label>
+            <div class="cred-input-wrap" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-secondary);cursor:pointer;">
+                <input type="checkbox" id="setting-thumb-crop-enabled" />
+                첫 번째 썸네일 이미지를 자동으로 크롭
+              </label>
+              <input type="number" id="setting-thumb-crop-percent" min="0" max="20" value="6" style="width:60px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:14px;" />
+              <span style="font-size:12px;color:var(--text-muted)">% (각 가장자리 기준)</span>
+            </div>
+          </div>
+          <div class="setting-row" style="align-items:flex-start;">
+            <span>옵션상품 생성 규칙</span>
+            <span style="font-size:12px;color:var(--text-muted);text-align:right;max-width:420px;">설정값 2장 = 썸네일 1장 + 공유 상세 1장, 설정값 3장 = 썸네일 1장 + 공유 상세 2장</span>
+          </div>
           <div class="setting-row">
             <span>상태</span>
             <span class="status-badge" id="nanobanana-status">미설정</span>

@@ -117,6 +117,10 @@ const App = {
     }
     const imgCountEl = document.getElementById('setting-img-count');
     if (imgCountEl) imgCountEl.value = settings.imgCount || 1;
+    const thumbCropEnabledEl = document.getElementById('setting-thumb-crop-enabled');
+    if (thumbCropEnabledEl) thumbCropEnabledEl.checked = settings.thumbCropEnabled !== false;
+    const thumbCropPercentEl = document.getElementById('setting-thumb-crop-percent');
+    if (thumbCropPercentEl) thumbCropPercentEl.value = settings.thumbCropPercent || 6;
   },
 
   applyPromptTemplate() {
@@ -190,6 +194,10 @@ const App = {
     if (pTxt && tpl && tpl.value === 'custom') s.imgPromptCustom = pTxt.value;
     const imgCountEl = document.getElementById('setting-img-count');
     if (imgCountEl) s.imgCount = Math.max(1, Math.min(5, parseInt(imgCountEl.value, 10) || 1));
+    const thumbCropEnabledEl = document.getElementById('setting-thumb-crop-enabled');
+    s.thumbCropEnabled = !!thumbCropEnabledEl?.checked;
+    const thumbCropPercentEl = document.getElementById('setting-thumb-crop-percent');
+    s.thumbCropPercent = Math.max(0, Math.min(20, parseInt(thumbCropPercentEl?.value, 10) || 6));
     Storage.setSettings(s);
   },
 
@@ -359,6 +367,10 @@ const App = {
 
     const imgCountEl = document.getElementById('setting-img-count');
     if (imgCountEl) imgCountEl.value = s.imgCount || 1;
+    const thumbCropEnabledEl = document.getElementById('setting-thumb-crop-enabled');
+    if (thumbCropEnabledEl) thumbCropEnabledEl.checked = s.thumbCropEnabled !== false;
+    const thumbCropPercentEl = document.getElementById('setting-thumb-crop-percent');
+    if (thumbCropPercentEl) thumbCropPercentEl.value = s.thumbCropPercent || 6;
   },
 
   saveSettings() {
@@ -378,6 +390,10 @@ const App = {
     if (ptx && tplSel && tplSel.value === 'custom') s.imgPromptCustom = ptx.value;
     const imgCountEl = document.getElementById('setting-img-count');
     if (imgCountEl) s.imgCount = Math.max(1, Math.min(5, parseInt(imgCountEl.value, 10) || 1));
+    const thumbCropEnabledEl = document.getElementById('setting-thumb-crop-enabled');
+    s.thumbCropEnabled = !!thumbCropEnabledEl?.checked;
+    const thumbCropPercentEl = document.getElementById('setting-thumb-crop-percent');
+    s.thumbCropPercent = Math.max(0, Math.min(20, parseInt(thumbCropPercentEl?.value, 10) || 6));
     s._initialized = true;
     Storage.setSettings(s);
 
@@ -395,14 +411,14 @@ const App = {
   resetSettings() {
     if (!this.serverDefaults) return UI.showToast('서버 기본값을 불러오는 중...', 'info');
     const d = this.serverDefaults;
-    const s = {
-      marginRate: Math.round(d.defaultMarginRate * 100),
-      smartstoreShippingFee: d.smartstoreShippingFee,
-      oliveyoungShippingFee: d.oliveyoungShippingFee,
-      shippingProfitBuffer: d.shippingProfitBuffer,
-      geminiModel: 'claude-sonnet-4-6',
-      namePrefix: '', nameSuffix: '', defaultStock: 999, _initialized: true,
-    };
+      const s = {
+        marginRate: Math.round(d.defaultMarginRate * 100),
+        smartstoreShippingFee: d.smartstoreShippingFee,
+        oliveyoungShippingFee: d.oliveyoungShippingFee,
+        shippingProfitBuffer: d.shippingProfitBuffer,
+        geminiModel: 'claude-sonnet-4-6',
+        namePrefix: '', nameSuffix: '', defaultStock: 999, imgCount: 1, thumbCropEnabled: true, thumbCropPercent: 6, _initialized: true,
+      };
     Storage.setSettings(s);
     this.loadSettingsToForm();
     Margin.SS_SHIPPING = s.smartstoreShippingFee;
@@ -476,6 +492,9 @@ const App = {
           localSettings.shippingProfitBuffer = s.shippingProfitBuffer;
           localSettings.geminiModel = 'claude-sonnet-4-6';
           localSettings.defaultStock = 999;
+          localSettings.imgCount = localSettings.imgCount || 1;
+          if (localSettings.thumbCropEnabled === undefined) localSettings.thumbCropEnabled = true;
+          localSettings.thumbCropPercent = localSettings.thumbCropPercent || 6;
           localSettings._initialized = true;
           Storage.setSettings(localSettings);
         }

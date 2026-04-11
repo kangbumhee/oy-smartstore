@@ -97,6 +97,44 @@ const Register = {
     }
   },
 
+  async _cropImageBorder(imageUrl, cropPercent = 6) {
+    const normalizedPercent = Math.max(0, Math.min(20, Number(cropPercent) || 0));
+    if (!imageUrl || normalizedPercent <= 0) return imageUrl;
+
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        try {
+          const width = img.naturalWidth || img.width;
+          const height = img.naturalHeight || img.height;
+          if (!width || !height) return resolve(imageUrl);
+
+          const cropX = Math.round(width * normalizedPercent / 100);
+          const cropY = Math.round(height * normalizedPercent / 100);
+          const cropW = Math.max(1, width - cropX * 2);
+          const cropH = Math.max(1, height - cropY * 2);
+
+          if (cropW <= 10 || cropH <= 10) {
+            return resolve(imageUrl);
+          }
+
+          const canvas = document.createElement('canvas');
+          canvas.width = cropW;
+          canvas.height = cropH;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return resolve(imageUrl);
+          ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+          resolve(canvas.toDataURL('image/png'));
+        } catch {
+          resolve(imageUrl);
+        }
+      };
+      img.onerror = () => resolve(imageUrl);
+      img.src = imageUrl;
+    });
+  },
+
   cleanProductName(rawName) {
     if (!rawName) return rawName;
     let name = rawName;
@@ -780,10 +818,11 @@ const Register = {
 
       const imgCount = Math.max(1, Math.min(5, settings.imgCount || 1));
       const sharedImageCount = Math.max(0, imgCount - 1);
-      const totalThumbnails = opts.length > 1 ? Math.min(opts.length, 5) : 1;
-      const genCount = Math.min(sharedImageCount + totalThumbnails, 8);
+      const isOptionProduct = opts.length > 1;
+      const totalThumbnails = 1;
+      const genCount = imgCount;
       const optionThumbnailList = opts.length > 1
-        ? opts.slice(0, totalThumbnails).map((o) => this._toHighResImage(o.image || product.thumbnail)).filter(Boolean)
+        ? [this._toHighResImage((opts[0]?.image) || product.thumbnail)].filter(Boolean)
         : [];
       const primaryThumbnail = optionThumbnailList[0] || this._toHighResImage(product.thumbnail || '');
 
@@ -855,6 +894,10 @@ const Register = {
         UI.updateProgressStep(0, 'error', '이미지 없음 — EccoAPI 키를 확인하세요');
         this.stopTimer();
         return;
+      }
+
+      if (settings.thumbCropEnabled !== false && imageUrls[0]) {
+        imageUrls[0] = await this._cropImageBorder(imageUrls[0], settings.thumbCropPercent || 6);
       }
 
       let descHtml = '';
@@ -952,15 +995,17 @@ const Register = {
         : '| 태그 없음';
 
       const naverImgUrls = uploadedImages.map((img) => img.url).filter(Boolean);
-      const thumbUploads = uploadedImages.slice(0, totalThumbnails);
-      const sharedUploads = uploadedImages.slice(totalThumbnails, totalThumbnails + sharedImageCount);
+      const thumbUploads = uploadedImages.slice(0, 1);
+      const sharedUploads = uploadedImages.slice(1, 1 + sharedImageCount);
 
       let imgsForDetailTop = naverImgUrls;
-      if (opts.length > 1 && totalThumbnails >= 1) {
-        if (sharedUploads.length > 0) {
-          imgsForDetailTop = sharedUploads.map((u) => u.url).filter(Boolean);
-        } else if (naverImgUrls.length > 0) {
-          imgsForDetailTop = naverImgUrls.slice(0, 1);
+      if (isOptionProduct) {
+        imgsForDetailTop = [
+          ...(thumbUploads[0]?.url ? [thumbUploads[0].url] : []),
+          ...sharedUploads.map((u) => u.url).filter(Boolean),
+        ];
+        if (imgsForDetailTop.length === 0 && naverImgUrls.length > 0) {
+          imgsForDetailTop = [naverImgUrls[0]];
         }
       }
 
