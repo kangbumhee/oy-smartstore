@@ -176,6 +176,12 @@ const Register = {
     return name || rawName;
   },
 
+  cleanOptionLabel(rawName) {
+    return this.cleanProductName(rawName || '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  },
+
   _getCurrentShopKey() {
     const creds = Storage.getCredentials();
     return String(creds.naverClientId || 'default-shop').trim() || 'default-shop';
@@ -873,6 +879,7 @@ const Register = {
     }
 
     const checkedOpts = this.getCheckedOptionsForProduct(goodsNo, allOpts);
+    const singleSelectedVariant = checkedOpts.length === 1 && allOpts.length > 1;
     let opts = checkedOpts.length > 0 ? checkedOpts : allOpts.map((o) => ({ ...o }));
     if (opts.length > 0) {
       if (checkedOpts.length > 0) {
@@ -938,6 +945,9 @@ const Register = {
         .replace(/\{brand\}/g, product.brand || '')
         .replace(/\{option\}/g, '');
 
+      const variantThumbnail = singleSelectedVariant
+        ? this._toHighResImage((opts[0]?.image) || product.thumbnail || '')
+        : '';
       const imgCount = Math.max(1, Math.min(5, settings.imgCount || 1));
       const sharedImageCount = Math.max(0, imgCount - 1);
       const isOptionProduct = opts.length > 1;
@@ -946,7 +956,7 @@ const Register = {
         : [];
       const totalThumbnails = isOptionProduct ? optionThumbnailList.length : 1;
       const genCount = isOptionProduct ? (totalThumbnails + sharedImageCount) : imgCount;
-      const primaryThumbnail = optionThumbnailList[0] || this._toHighResImage(product.thumbnail || '');
+      const primaryThumbnail = variantThumbnail || optionThumbnailList[0] || this._toHighResImage(product.thumbnail || '');
 
       const tokenP = API.obtainNaverToken(15);
 
@@ -1167,11 +1177,23 @@ const Register = {
 
       const prefix = settings.namePrefix || '';
       const suffix = settings.nameSuffix || '';
-      const registrationName = `${prefix}${prefix ? ' ' : ''}${cleanedBaseName}${suffix ? ' ' : ''}${suffix}`.trim();
+      const selectedOptionLabel = singleSelectedVariant ? this.cleanOptionLabel(opts[0]?.name || opts[0]?.optionName || '') : '';
+      const registrationBaseName = singleSelectedVariant && selectedOptionLabel
+        ? `${cleanedBaseName} ${selectedOptionLabel}`.trim()
+        : cleanedBaseName;
+      const registrationName = `${prefix}${prefix ? ' ' : ''}${registrationBaseName}${suffix ? ' ' : ''}${suffix}`.trim();
       const defaultStock = settings.defaultStock || 999;
 
       let finalSellingPrice = calc.sellingPrice;
+      let finalStock = defaultStock;
       let registrationOptions = opts;
+
+      if (singleSelectedVariant) {
+        const selectedOpt = opts[0] || {};
+        finalSellingPrice = Number(selectedOpt.sellingPrice || calc.sellingPrice || 0);
+        finalStock = Math.max(0, parseInt(selectedOpt.stockQuantity ?? selectedOpt.quantity ?? defaultStock, 10) || 0);
+        registrationOptions = [];
+      }
 
       if (opts.length > 1) {
         const optPrices = opts.map((o) => o.price || 0).filter((p) => p > 0);
@@ -1209,7 +1231,7 @@ const Register = {
         detailHtml,
         uploadedImages,
         options: registrationOptions,
-        stock: defaultStock,
+        stock: finalStock,
         brand: brandName || product.brand || '',
         oliveyoungCategory: oyCategory,
         sellerTags,
