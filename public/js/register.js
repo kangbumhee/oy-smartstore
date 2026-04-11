@@ -158,6 +158,7 @@ const Register = {
     name = name.replace(/레디백\s*증정/gi, '');
     name = name.replace(/,\s*증정[^,]*/gi, '');
     name = name.replace(/\bfree\b/gi, '');
+    name = name.replace(/[#"*?<>\\]/g, ' ');
     name = name.replace(/,\s*$/, '');
     name = name.replace(/\s{2,}/g, ' ').trim();
     name = name.replace(/^[\s\/,]+|[\s\/,]+$/g, '').trim();

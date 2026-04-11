@@ -3,6 +3,7 @@ const { getDetailAttribute } = require('../../lib/delivery-template');
 const { resolveDeliveryProfile, buildDeliveryInfo, hasDeliveryProfileError } = require('../../lib/naver-delivery');
 
 const PRODUCT_URL = `${NAVER_API_BASE}/v2/products`;
+const OPTION_PRICE_LIMIT = 9650;
 
 /**
  * 올리브영 프로모션 태그 제거 → 스마트스토어용 상품명
@@ -29,6 +30,7 @@ function cleanProductName(rawName) {
   name = name.replace(/,?\s*FREE$/gi, '');
   name = name.replace(/,?\s*\(One\s*size\)/gi, '');
   name = name.replace(/\d+COLOR\s*/gi, '');
+  name = name.replace(/[#"*?<>\\]/g, ' ');
   name = name.replace(/,\s*$/, '');
 
   name = name.replace(/\s{2,}/g, ' ').trim();
@@ -37,21 +39,69 @@ function cleanProductName(rawName) {
   return name || rawName;
 }
 
-function buildOptions(oyOptions) {
+function sanitizeOptionName(rawName, index) {
+  let name = cleanProductName(rawName || `옵션${index + 1}`);
+  if (name.length > 25) name = name.substring(0, 25);
+  return name || `옵션${index + 1}`;
+}
+
+function resolveOptionBasePrice(oyOptions, requestedSellingPrice = 0) {
+  const optionPrices = Array.isArray(oyOptions)
+    ? oyOptions.map((o) => parseInt(o.sellingPrice || o.price || 0, 10)).filter((p) => p > 0)
+    : [];
+
+  if (optionPrices.length === 0) {
+    const fallbackPrice = Math.max(0, Math.round(Number(requestedSellingPrice) || 0));
+    return {
+      feasible: true,
+      basePrice: fallbackPrice,
+      minPrice: fallbackPrice,
+      maxPrice: fallbackPrice,
+      spread: 0,
+    };
+  }
+
+  const minPrice = Math.min(...optionPrices);
+  const maxPrice = Math.max(...optionPrices);
+  const spread = maxPrice - minPrice;
+  const lowerBound = maxPrice - OPTION_PRICE_LIMIT;
+  const upperBound = minPrice + OPTION_PRICE_LIMIT;
+
+  if (lowerBound <= upperBound) {
+    let target = Math.round(Number(requestedSellingPrice) || 0);
+    if (target <= 0) target = minPrice;
+    const basePrice = Math.max(lowerBound, Math.min(upperBound, target));
+    return {
+      feasible: true,
+      basePrice,
+      minPrice,
+      maxPrice,
+      spread,
+      lowerBound,
+      upperBound,
+    };
+  }
+
+  return {
+    feasible: false,
+    basePrice: minPrice,
+    minPrice,
+    maxPrice,
+    spread,
+    lowerBound,
+    upperBound,
+  };
+}
+
+function buildOptions(oyOptions, baseSalePrice) {
   if (!oyOptions || oyOptions.length === 0) return null;
 
   console.log('[buildOptions] Input:', JSON.stringify(oyOptions.slice(0, 3)));
 
-  const basePrices = oyOptions
-    .map((o) => parseInt(o.sellingPrice || o.price || 0, 10))
-    .filter((p) => p > 0);
-  const minPrice = basePrices.length > 0 ? Math.min(...basePrices) : 0;
-
   const combinations = oyOptions.map((opt, i) => {
     const optPrice = parseInt(opt.sellingPrice || opt.price || 0, 10);
-    const priceDiff = minPrice > 0 && optPrice > 0 ? optPrice - minPrice : 0;
-    let name = (opt.name || opt.optionName || `옵션${i + 1}`).trim();
-    if (name.length > 25) name = name.substring(0, 25);
+    const priceDiff = baseSalePrice > 0 && optPrice > 0 ? optPrice - baseSalePrice : 0;
+    const name = sanitizeOptionName(opt.name || opt.optionName, i);
 
     const stockQty = Math.max(0, parseInt(opt.stockQuantity ?? opt.quantity ?? 0, 10));
     const unusable = opt.soldOut === true || opt.soldOutFlag === 'Y' || stockQty <= 0;
@@ -59,7 +109,7 @@ function buildOptions(oyOptions) {
     return {
       optionName1: name,
       stockQuantity: stockQty,
-      price: Math.max(0, Math.round(priceDiff)),
+      price: Math.max(-OPTION_PRICE_LIMIT, Math.min(OPTION_PRICE_LIMIT, Math.round(priceDiff))),
       usable: !unusable,
     };
   });
@@ -100,7 +150,22 @@ module.exports = async function handler(req, res) {
     const headers = getAuthHeadersFromToken(token);
     const cleanedName = cleanProductName(name).substring(0, 100);
     const detailAttr = getDetailAttribute(oliveyoungCategory, cleanedName, brand);
-    const optionInfo = buildOptions(options);
+    const optionPricing = resolveOptionBasePrice(options, sellingPrice);
+    if (Array.isArray(options) && options.length > 0 && !optionPricing.feasible) {
+      return res.status(400).json({
+        success: false,
+        error: '옵션 가격 차이가 너무 커 일반상품 옵션으로 등록할 수 없습니다. 그룹상품으로 등록하거나 옵션 가격 차이를 줄여 주세요.',
+        invalidInputs: [
+          {
+            name: 'originProduct.detailAttribute.optionInfo.optionCombinations.price',
+            type: 'OptionPriceSpreadExceeded',
+            message: `옵션 가격 차이(${optionPricing.spread.toLocaleString()}원)가 일반상품 허용 범위(19,300원)를 초과했습니다.`,
+          },
+        ],
+      });
+    }
+    const baseSalePrice = optionPricing.basePrice > 0 ? optionPricing.basePrice : Math.round(Number(sellingPrice) || 0);
+    const optionInfo = buildOptions(options, baseSalePrice);
     const hasOptions = optionInfo && optionInfo.optionCombinations && optionInfo.optionCombinations.length > 0;
     const resolvedDelivery = await resolveDeliveryProfile(headers);
     let effectiveDeliveryProfile = resolvedDelivery.success
@@ -177,8 +242,8 @@ module.exports = async function handler(req, res) {
         statusType: 'SALE',
         saleType: 'NEW',
         leafCategoryId: String(categoryId),
-        name: name.substring(0, 100),
-        salePrice: Math.round(sellingPrice),
+        name: cleanedName,
+        salePrice: hasOptions ? baseSalePrice : Math.round(sellingPrice),
         stockQuantity: hasOptions ? 0 : stock,
         detailContent: detailHtml,
         images: imageBlock,
@@ -194,6 +259,7 @@ module.exports = async function handler(req, res) {
     console.log('[register] name:', cleanedName, '| options:', options.length,
       '| hasOptions:', hasOptions, '| stockQuantity:', hasOptions ? 0 : stock,
       hasOptions ? `combinations: ${optionInfo.optionCombinations.length}` : '',
+      hasOptions ? `| baseSalePrice: ${baseSalePrice}` : '',
       '| deliveryProfile:', JSON.stringify({
         shippingAddressId: effectiveDeliveryProfile.shippingAddressId,
         returnAddressId: effectiveDeliveryProfile.returnAddressId,
