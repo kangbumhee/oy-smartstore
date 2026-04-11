@@ -12,6 +12,35 @@ const { buildStandardPurchaseOptionsForLabel, chooseBestGuide, sanitizeValueName
 const GROUP_PRODUCTS_URL = `${NAVER_API_BASE}/v2/standard-group-products`;
 const GUIDE_URL = `${NAVER_API_BASE}/v2/standard-purchase-option-guides`;
 
+/** 비동기 ERROR 응답에서 invalidInputs를 모아 프론트에 넘김 */
+function collectInvalidInputsFromPollFinal(final) {
+  const out = [];
+  const push = (arr) => {
+    if (!Array.isArray(arr)) return;
+    for (const row of arr) {
+      if (row && typeof row === 'object') out.push(row);
+    }
+  };
+  const raw = final?.raw;
+  if (raw && typeof raw === 'object') {
+    push(raw.invalidInputs);
+    push(raw.progress?.invalidInputs);
+    push(raw.data?.invalidInputs);
+  }
+  const fr = final?.failReason;
+  if (fr && typeof fr === 'object') {
+    push(fr.invalidInputs);
+    if (Array.isArray(fr)) push(fr);
+  }
+  const seen = new Set();
+  return out.filter((row) => {
+    const k = JSON.stringify(row);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
 function cleanProductName(rawName) {
   if (!rawName) return rawName;
   let name = rawName;
@@ -445,11 +474,21 @@ module.exports = async function handler(req, res) {
           });
         }
         if (final && (final.state === 'ERROR' || final.state === 'FAILED')) {
-          const reason = final.failReason || final.raw?.progress?.invalidInputs || final;
+          const polledInvalid = collectInvalidInputsFromPollFinal(final);
+          let reason = final.failReason || final.raw || final;
+          if (typeof reason === 'object' && reason !== null && !Array.isArray(reason)) {
+            reason = {
+              ...reason,
+              invalidInputs: polledInvalid.length ? polledInvalid : (reason.invalidInputs || []),
+            };
+          } else if (polledInvalid.length) {
+            reason = { errorMessage: String(reason || ''), invalidInputs: polledInvalid };
+          }
           console.warn('[group-register] Async', final.state, ':', JSON.stringify(reason).substring(0, 500));
           return res.status(200).json({
             success: false,
             error: reason,
+            invalidInputs: polledInvalid.length ? polledInvalid : undefined,
             fallbackToNormal: true,
             message: `그룹등록 비동기 처리 ${final.state}`,
           });

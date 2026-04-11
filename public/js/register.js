@@ -596,8 +596,165 @@ const Register = {
     return s.length > maxLen ? s.slice(0, maxLen) : s;
   },
 
+  /** 카테고리 속성 API 응답 → 네이버 productAttributes[] (PRIMARY만, 등록 로직과 동일) */
+  buildProductAttributesFromAttrData(attrData) {
+    const productAttributes = [];
+    const attrs = Array.isArray(attrData?.attributes) ? attrData.attributes : [];
+    for (const attr of attrs) {
+      if (!attr.required) continue;
+      const vals = attr.values || [];
+      const type = attr.type || 'SINGLE_SELECT';
+      if (type === 'DIRECT_INPUT' || vals.length === 0) {
+        productAttributes.push({
+          attributeSeq: attr.attributeSeq,
+          attributeRealValue: '상세페이지 참조',
+        });
+        continue;
+      }
+      if (type === 'RANGE' && vals.length > 0) {
+        const v = vals[Math.min(1, vals.length - 1)] || vals[0];
+        const num = String(v.value || '').replace(/[^\d.]/g, '') || '1';
+        const row = {
+          attributeSeq: attr.attributeSeq,
+          attributeValueSeq: v.valueSeq,
+          attributeRealValue: num,
+        };
+        if (attr.unitCode) row.attributeRealValueUnitCode = attr.unitCode;
+        productAttributes.push(row);
+        continue;
+      }
+      productAttributes.push({
+        attributeSeq: attr.attributeSeq,
+        attributeValueSeq: vals[0].valueSeq,
+      });
+    }
+    return productAttributes;
+  },
+
   _extractInvalidInputs(regData) {
-    return regData?.invalidInputs || regData?.error?.invalidInputs || regData?.error?.progress?.invalidInputs || [];
+    const found = [];
+    const seen = new Set();
+    const addRows = (arr) => {
+      if (!Array.isArray(arr)) return;
+      for (const item of arr) {
+        if (!item || typeof item !== 'object') continue;
+        const sig = JSON.stringify(item);
+        if (seen.has(sig)) continue;
+        seen.add(sig);
+        found.push(item);
+      }
+    };
+    const walk = (obj, depth) => {
+      if (depth > 18 || obj == null) return;
+      if (typeof obj !== 'object') return;
+      if (Array.isArray(obj)) {
+        if (
+          obj.length > 0 &&
+          typeof obj[0] === 'object' &&
+          (Object.prototype.hasOwnProperty.call(obj[0], 'message') ||
+            Object.prototype.hasOwnProperty.call(obj[0], 'type') ||
+            Object.prototype.hasOwnProperty.call(obj[0], 'name'))
+        ) {
+          addRows(obj);
+        } else {
+          obj.forEach((x) => walk(x, depth + 1));
+        }
+        return;
+      }
+      addRows(obj.invalidInputs);
+      for (const k of ['error', 'progress', 'failReason', 'data', 'raw', 'result']) {
+        if (obj[k] != null) walk(obj[k], depth + 1);
+      }
+    };
+    walk(regData, 0);
+    const em =
+      regData?.error &&
+      typeof regData.error === 'object' &&
+      typeof regData.error.errorMessage === 'string'
+        ? regData.error.errorMessage.trim()
+        : '';
+    if (found.length === 0 && em) {
+      addRows([{ name: '네이버 검증', message: em }]);
+    } else if (found.length === 0 && regData?.error) {
+      const msg = this._extractRegisterErrorMessage(regData.error);
+      if (msg && msg !== '알 수 없는 오류') {
+        addRows([{ name: '네이버 검증', message: msg }]);
+      }
+    }
+    return found;
+  },
+
+  _mergeInvalidInputs(regData, groupFailureInfo) {
+    const a = this._extractInvalidInputs(regData || {});
+    const b = groupFailureInfo?.error
+      ? this._extractInvalidInputs({ error: groupFailureInfo.error })
+      : [];
+    const seen = new Set();
+    const out = [];
+    for (const row of [...a, ...b]) {
+      const sig = JSON.stringify(row);
+      if (seen.has(sig)) continue;
+      seen.add(sig);
+      out.push(row);
+    }
+    return out;
+  },
+
+  async _refreshRetryAttributePreview() {
+    const previewEl = document.getElementById('retry-attr-preview');
+    const attrsEl = document.getElementById('retry-attributes-json');
+    const categoryEl = document.getElementById('retry-category-id');
+    if (!previewEl || !attrsEl) return;
+    const cat = (categoryEl?.value || '').trim();
+    let parsed;
+    try {
+      parsed = JSON.parse(attrsEl.value || '[]');
+      if (!Array.isArray(parsed)) throw new Error('not array');
+    } catch {
+      previewEl.innerHTML = '<span style="color:#dc2626;font-size:11px;">속성 JSON 형식 오류</span>';
+      return;
+    }
+    if (parsed.length === 0) {
+      previewEl.innerHTML = '<span style="color:#64748b;font-size:11px;">속성 없음 — 그룹/일부 카테고리에서 연관 오류가 나면「속성 다시 채우기」를 눌러 보세요.</span>';
+      return;
+    }
+    if (!cat) {
+      previewEl.innerHTML = parsed
+        .map(
+          (r) =>
+            `<div style="font-size:11px;color:#475569;">• 속성코드 <code>${this._escHtml(String(r.attributeSeq))}</code> → 값코드 <code>${this._escHtml(String(r.attributeValueSeq || r.attributeRealValue || '-'))}</code></div>`
+        )
+        .join('');
+      return;
+    }
+    previewEl.innerHTML = '<span style="color:#64748b;font-size:11px;">속성 이름 조회 중…</span>';
+    try {
+      await API.obtainNaverToken(15);
+      const attrData = await API.getCategoryAttributes(cat);
+      const bySeq = {};
+      for (const a of attrData.attributes || []) {
+        bySeq[a.attributeSeq] = { name: a.name || `속성${a.attributeSeq}`, values: {} };
+        for (const v of a.values || []) {
+          bySeq[a.attributeSeq].values[v.valueSeq] = v.value || String(v.valueSeq);
+        }
+      }
+      const lines = parsed.map((r) => {
+        const meta = bySeq[r.attributeSeq];
+        const nm = meta ? meta.name : `속성 #${r.attributeSeq}`;
+        let vshow = '';
+        if (r.attributeValueSeq != null && meta?.values?.[r.attributeValueSeq] != null) {
+          vshow = meta.values[r.attributeValueSeq];
+        } else if (r.attributeRealValue) {
+          vshow = String(r.attributeRealValue);
+        } else {
+          vshow = r.attributeValueSeq != null ? `값코드 ${r.attributeValueSeq}` : '-';
+        }
+        return `<div style="font-size:11px;color:#334155;margin:2px 0;">• <strong>${this._escHtml(nm)}</strong> : ${this._escHtml(vshow)}</div>`;
+      });
+      previewEl.innerHTML = lines.join('');
+    } catch (e) {
+      previewEl.innerHTML = `<span style="color:#dc2626;font-size:11px;">이름 조회 실패: ${this._escHtml(String(e.message || e))}</span>`;
+    }
   },
 
   _saveRetryContext(goodsNo, context) {
@@ -768,7 +925,8 @@ const Register = {
       }
 
       const errMsg = this._extractRegisterErrorMessage(regData.error);
-      const invalidInputs = this._extractInvalidInputs(regData);
+      const mergedGi = groupFailureInfo || ctx.groupFailureInfo;
+      const invalidInputs = this._mergeInvalidInputs(regData, mergedGi ? { error: mergedGi.error } : null);
       this._saveRetryContext(goodsNo, {
         ...ctx,
         detailHtml: regPayload.detailHtml,
@@ -778,7 +936,7 @@ const Register = {
         invalidInputs,
         forceNormalRetry: mustKeepGroup ? false : !!ctx.forceNormalRetry,
         mustKeepGroup,
-        groupFailureInfo: ctx.groupFailureInfo || groupFailureInfo,
+        groupFailureInfo: mergedGi || ctx.groupFailureInfo,
       });
 
       UI.updateProgressStep(1, 'error', `재등록 실패 (${totalTime}초): ${this._clipErr(errMsg, 100)}`);
@@ -838,8 +996,14 @@ const Register = {
         </div>
       ` : ''}
 
+      <div style="margin-bottom:12px;padding:10px;border:1px solid #e0e7ff;background:#f5f7ff;border-radius:8px;font-size:12px;color:#3730a3;line-height:1.55;">
+        <strong>연관 속성 오류가 날 때</strong><br/>
+        숫자만 있는 JSON은 사람이 고치기 어렵습니다. 아래 <strong>「속성 다시 채우기」</strong>를 누르면 현재 카테고리 ID 기준으로 네이버 API에서 필수(PRIMARY) 속성을 다시 받아, 첫 허용값으로 덮어씁니다.
+        그래도 실패하면 스마트스토어 센터에서 같은 카테고리 상품의 속성 조합을 참고하거나, <strong>일반상품 API</strong>로 우회해 보세요.
+      </div>
+
       <div style="margin-bottom:12px;">
-        <div style="font-size:12px;font-weight:700;color:#334155;margin-bottom:6px;">invalidInputs</div>
+        <div style="font-size:12px;font-weight:700;color:#334155;margin-bottom:6px;">네이버 검증 상세 (invalidInputs)</div>
         ${invalidInputsHtml}
       </div>
 
@@ -852,8 +1016,16 @@ const Register = {
         <button type="button" class="btn btn-outline btn-sm" id="retry-sanitize-detail">금칙어 자동 치환</button>
       </div>
 
-      <label style="display:block;font-size:12px;font-weight:700;color:#334155;margin-bottom:6px;">속성값 JSON</label>
+      <label style="display:block;font-size:12px;font-weight:700;color:#334155;margin-bottom:6px;">속성값 JSON (API 그대로 · 수정 어렵다면 아래 버튼 사용)</label>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+        <button type="button" class="btn btn-primary btn-sm" id="retry-refill-attrs">속성 다시 채우기</button>
+        <button type="button" class="btn btn-outline btn-sm" id="retry-clear-attrs">속성 비우기 ([])</button>
+      </div>
       <textarea id="retry-attributes-json" style="width:100%;height:160px;padding:10px;border:1px solid #cbd5e1;border-radius:8px;font-size:12px;line-height:1.5;">${this._escHtml(JSON.stringify(ctx.productAttributes || [], null, 2))}</textarea>
+      <div style="margin:8px 0 12px;padding:10px;border:1px dashed #cbd5e1;border-radius:8px;background:#fafafa;">
+        <div style="font-size:11px;font-weight:700;color:#64748b;margin-bottom:6px;">읽기 쉬운 미리보기</div>
+        <div id="retry-attr-preview"></div>
+      </div>
 
       <label style="display:flex;align-items:center;gap:8px;margin:12px 0 16px;font-size:12px;color:#334155;cursor:pointer;">
         <input id="retry-force-normal" type="checkbox" ${forceNormalChecked} />
@@ -899,6 +1071,48 @@ const Register = {
         });
       };
     }
+
+    const refillBtn = document.getElementById('retry-refill-attrs');
+    const clearBtn = document.getElementById('retry-clear-attrs');
+    let previewTimer = null;
+    const schedPreview = () => {
+      clearTimeout(previewTimer);
+      previewTimer = setTimeout(() => this._refreshRetryAttributePreview(), 350);
+    };
+    if (attrsEl) attrsEl.addEventListener('input', schedPreview);
+    if (categoryEl) categoryEl.addEventListener('input', schedPreview);
+
+    if (refillBtn && attrsEl && categoryEl) {
+      refillBtn.onclick = async () => {
+        const cat = categoryEl.value.trim();
+        if (!cat) {
+          UI.showToast('먼저 카테고리 ID를 입력하세요', 'error');
+          return;
+        }
+        refillBtn.disabled = true;
+        try {
+          await API.obtainNaverToken(15);
+          const attrData = await API.getCategoryAttributes(cat);
+          const built = this.buildProductAttributesFromAttrData(attrData);
+          attrsEl.value = JSON.stringify(built, null, 2);
+          await this._refreshRetryAttributePreview();
+          UI.showToast(`필수 속성 ${built.length}건으로 다시 채웠습니다`, 'success');
+        } catch (e) {
+          UI.showToast('속성 조회 실패: ' + String(e.message || e), 'error');
+        } finally {
+          refillBtn.disabled = false;
+        }
+      };
+    }
+    if (clearBtn && attrsEl) {
+      clearBtn.onclick = async () => {
+        attrsEl.value = '[]';
+        await this._refreshRetryAttributePreview();
+        UI.showToast('속성을 비웠습니다 (빈 배열)', 'info', 2000);
+      };
+    }
+
+    void this._refreshRetryAttributePreview();
   },
 
   async registerOne(goodsNo) {
@@ -1145,36 +1359,8 @@ const Register = {
       const manufacturerName = brandName;
       if (brandName) console.log('[등록] 브랜드:', brandName, '| 제조사:', manufacturerName);
 
-      let productAttributes = [];
       const attrs = Array.isArray(attrData.attributes) ? attrData.attributes : [];
-      for (const attr of attrs) {
-        if (!attr.required) continue;
-        const vals = attr.values || [];
-        const type = attr.type || 'SINGLE_SELECT';
-        if (type === 'DIRECT_INPUT' || vals.length === 0) {
-          productAttributes.push({
-            attributeSeq: attr.attributeSeq,
-            attributeRealValue: '상세페이지 참조',
-          });
-          continue;
-        }
-        if (type === 'RANGE' && vals.length > 0) {
-          const v = vals[Math.min(1, vals.length - 1)] || vals[0];
-          const num = String(v.value || '').replace(/[^\d.]/g, '') || '1';
-          const row = {
-            attributeSeq: attr.attributeSeq,
-            attributeValueSeq: v.valueSeq,
-            attributeRealValue: num,
-          };
-          if (attr.unitCode) row.attributeRealValueUnitCode = attr.unitCode;
-          productAttributes.push(row);
-          continue;
-        }
-        productAttributes.push({
-          attributeSeq: attr.attributeSeq,
-          attributeValueSeq: vals[0].valueSeq,
-        });
-      }
+      const productAttributes = this.buildProductAttributesFromAttrData(attrData);
       if (productAttributes.length > 0) {
         console.log('[등록] 필수 속성', productAttributes.length, '건 자동 입력 (전체:', attrs.length + '건)');
       }
@@ -1380,7 +1566,7 @@ const Register = {
       } else {
         const errRaw = regData.error;
         const errMsg = this._extractRegisterErrorMessage(errRaw);
-        const invalidInputs = this._extractInvalidInputs(regData);
+        const invalidInputs = this._mergeInvalidInputs(regData, groupFailureInfo);
         console.error('[등록 실패 상세]', errRaw);
         if (invalidInputs.length > 0) {
           console.error('[invalidInputs]', JSON.stringify(invalidInputs, null, 2));
