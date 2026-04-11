@@ -222,18 +222,17 @@ module.exports = async function handler(req, res) {
     }
     const headers = getAuthHeadersFromToken(token);
     const cleanedName = cleanProductName(name).substring(0, 100);
-    let effectiveDeliveryProfile = deliveryProfile;
+    const resolvedDelivery = await resolveDeliveryProfile(headers);
+    let effectiveDeliveryProfile = resolvedDelivery.success
+      ? resolvedDelivery.profile
+      : deliveryProfile;
 
     if (!effectiveDeliveryProfile?.shippingAddressId || !effectiveDeliveryProfile?.returnAddressId) {
-      const resolvedDelivery = await resolveDeliveryProfile(headers);
-      if (!resolvedDelivery.success) {
-        return res.status(400).json({
-          success: false,
-          error: resolvedDelivery.error,
-          deliveryProfile: resolvedDelivery.profile,
-        });
-      }
-      effectiveDeliveryProfile = resolvedDelivery.profile;
+      return res.status(400).json({
+        success: false,
+        error: resolvedDelivery.error || '배송 프로필을 확인할 수 없습니다.',
+        deliveryProfile: effectiveDeliveryProfile || null,
+      });
     }
 
     let deliveryInfo;
@@ -373,7 +372,7 @@ module.exports = async function handler(req, res) {
         shippingAddressId: effectiveDeliveryProfile.shippingAddressId,
         returnAddressId: effectiveDeliveryProfile.returnAddressId,
         outboundLocationId: effectiveDeliveryProfile.outboundLocationId || null,
-        deliveryBundleGroupUsable: true,
+        deliveryBundleGroupUsable: !!effectiveDeliveryProfile.deliveryBundleGroupId,
       }));
 
     let r, text, data;

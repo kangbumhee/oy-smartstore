@@ -12,6 +12,17 @@ const Margin = {
     }
   },
 
+  resolveProductPrice(product, options) {
+    const opts = Array.isArray(options) ? options : (Array.isArray(product?.options) ? product.options : []);
+    const optPrices = opts
+      .map((o) => Number(o?.price ?? o?.sellingPrice ?? 0))
+      .filter((p) => p > 0);
+
+    if (optPrices.length === 1) return optPrices[0];
+    if (optPrices.length > 1) return Math.min(...optPrices);
+    return Number(product?.price || 0);
+  },
+
   calculate(oyPrice, marginRate) {
     oyPrice = Number(oyPrice) || 0;
     marginRate = Number(marginRate) || 15;
@@ -20,7 +31,7 @@ const Margin = {
     const sellingPrice = Math.ceil((oyPrice * marginMultiplier + this.BUFFER) / 100) * 100;
     const marginAmount = sellingPrice - oyPrice - this.BUFFER;
     const shippingProfit = oyPrice >= 20000 ? this.SS_SHIPPING : this.SS_SHIPPING - this.OY_SHIPPING;
-    const totalProfit = marginAmount + shippingProfit;
+    const estimatedNetProfit = marginAmount + shippingProfit;
 
     return {
       oyPrice,
@@ -28,7 +39,8 @@ const Margin = {
       sellingPrice,
       marginAmount,
       shippingProfit,
-      totalProfit,
+      totalProfit: marginAmount,
+      estimatedNetProfit,
       oyShippingFree: oyPrice >= 20000,
     };
   },

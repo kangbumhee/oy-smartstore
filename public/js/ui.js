@@ -69,7 +69,8 @@ const UI = {
   renderQueueItem(product) {
     const settings = Storage.getSettings();
     const marginRate = product.marginRate || settings.marginRate || 15;
-    const calc = Margin.calculate(product.price, marginRate);
+    const effectiveOyPrice = Margin.resolveProductPrice(product, product.options);
+    const calc = Margin.calculate(effectiveOyPrice, marginRate);
     const thumb = product.thumbnail || '';
     const oyCategory = `${product.category || ''} ${product.subCategory || ''}`.trim();
     const saved = Storage.getSavedCategory(oyCategory);
@@ -104,7 +105,7 @@ const UI = {
             <div class="queue-item-prices">
               <div class="price-box">
                 <span class="label">올리브영가</span>
-                <span class="value">${Margin.formatPrice(product.price)}</span>
+                <span class="value">${Margin.formatPrice(effectiveOyPrice)}</span>
               </div>
               <div class="price-box">
                 <span class="label">판매가</span>

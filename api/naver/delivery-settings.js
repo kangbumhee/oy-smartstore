@@ -32,6 +32,7 @@ module.exports = async function handler(req, res) {
       profile: resolved.profile,
       outboundLocations: resolved.outboundLocations,
       addressBooks: resolved.addressBooks,
+      bundleGroups: resolved.bundleGroups,
     });
   } catch (e) {
     return res.status(500).json({ success: false, error: e.message });

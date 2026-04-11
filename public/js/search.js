@@ -86,7 +86,8 @@ const Search = {
 
     const settings = Storage.getSettings();
     const marginRate = settings.marginRate || 15;
-    const calc = Margin.calculate(product.price, marginRate);
+    const effectiveOyPrice = Margin.resolveProductPrice(product, product.options);
+    const calc = Margin.calculate(effectiveOyPrice, marginRate);
 
     let optionsHtml = '';
     if (product.options && product.options.length > 1) {
@@ -112,8 +113,8 @@ const Search = {
           <div class="modal-product-category">${product.category || ''} ${product.subCategory ? '> ' + product.subCategory : ''}</div>
           <div class="modal-price-section">
             <div class="modal-oy-price">
-              <span class="price-current">${Number(product.price).toLocaleString()}원</span>
-              ${product.originalPrice > product.price ? `<span class="price-original">${Number(product.originalPrice).toLocaleString()}원</span>` : ''}
+              <span class="price-current">${Number(effectiveOyPrice).toLocaleString()}원</span>
+              ${product.originalPrice > effectiveOyPrice ? `<span class="price-original">${Number(product.originalPrice).toLocaleString()}원</span>` : ''}
               ${product.discount ? `<span class="price-discount">${product.discount}%</span>` : ''}
             </div>
           </div>
@@ -144,7 +145,7 @@ const Search = {
     const profitEl = document.getElementById('modal-profit');
 
     function updateModal() {
-      const c = Margin.calculate(product.price, rangeEl.value);
+      const c = Margin.calculate(Margin.resolveProductPrice(product, product.options), rangeEl.value);
       priceEl.textContent = Margin.formatPrice(c.sellingPrice);
       profitEl.textContent = `예상 순이익: ${Margin.formatPrice(c.totalProfit)}`;
     }

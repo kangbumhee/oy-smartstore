@@ -25,7 +25,7 @@ const Register = {
     const product = queue.find((p) => p.goodsNo === goodsNo);
     if (!product) return;
     Storage.updateQueueItem(goodsNo, { marginRate });
-    const calc = Margin.calculate(product.price, marginRate);
+    const calc = Margin.calculate(Margin.resolveProductPrice(product, product.options), marginRate);
     const sellingEl = document.getElementById(`queue-selling-${goodsNo}`);
     const profitEl = document.getElementById(`queue-profit-${goodsNo}`);
     const numEl = document.getElementById(`queue-margin-num-${goodsNo}`);
@@ -134,7 +134,7 @@ const Register = {
     const shopKey = this._getCurrentShopKey();
     if (!forceRefresh) {
       const cached = Storage.getDeliveryProfile(shopKey);
-      if (cached?.shippingAddressId && cached?.returnAddressId) {
+      if (cached?.shippingAddressId && cached?.returnAddressId && Object.prototype.hasOwnProperty.call(cached, 'deliveryBundleGroupId')) {
         return cached;
       }
     }
@@ -397,7 +397,7 @@ const Register = {
     if (!product) return UI.showToast('상품 정보를 찾을 수 없습니다', 'error');
 
     const marginRate = product.marginRate || 15;
-    const calc = Margin.calculate(product.price, marginRate);
+    let calc = Margin.calculate(Margin.resolveProductPrice(product, product.options), marginRate);
     const cleanedBaseName = this.cleanProductName(product.name);
     let deliveryProfile;
 
@@ -434,6 +434,7 @@ const Register = {
       product.options = opts;
       Storage.updateQueueItem(goodsNo, { options: opts });
     }
+    calc = Margin.calculate(Margin.resolveProductPrice(product, opts), marginRate);
 
     const optCount = opts.length;
     const settings = Storage.getSettings();
@@ -790,7 +791,7 @@ const Register = {
           name: cleanedBaseName,
           brand: product.brand,
           thumbnail: product.thumbnail,
-          oyPrice: product.price,
+          oyPrice: Margin.resolveProductPrice(product, opts),
           sellingPrice: calc.sellingPrice,
           marginRate,
           categoryId,
