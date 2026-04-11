@@ -1219,7 +1219,7 @@ const Register = {
         deliveryProfile,
       };
 
-      if (useGroupRegister && opts.length > 1 && thumbUploads.length > 0) {
+      if (useGroupRegister && registrationOptions.length > 0 && thumbUploads.length > 0) {
         regPayload.optionThumbnailUploads = thumbUploads;
         regPayload.sharedOptionalUploads = sharedUploads;
       }

@@ -39,6 +39,12 @@ function cleanProductName(rawName) {
   return name.replace(/\s{2,}/g, ' ').trim().replace(/^[\s\/,]+|[\s\/,]+$/g, '').trim() || rawName;
 }
 
+function trimGroupProductName(rawName, maxLength = 40) {
+  const cleaned = cleanProductName(rawName || '');
+  if (cleaned.length <= maxLength) return cleaned;
+  return cleaned.substring(0, maxLength).trim();
+}
+
 /**
  * GET /v2/standard-purchase-option-guides?categoryId=...
  * 공식 응답:
@@ -191,6 +197,7 @@ module.exports = async function handler(req, res) {
     }
     const headers = getAuthHeadersFromToken(token);
     const cleanedName = cleanProductName(name).substring(0, 100);
+    const groupProductName = trimGroupProductName(name, 40);
     const resolvedDelivery = await resolveDeliveryProfile(headers);
     let effectiveDeliveryProfile = resolvedDelivery.success
       ? resolvedDelivery.profile
@@ -325,7 +332,7 @@ module.exports = async function handler(req, res) {
 
     const groupProductBody = {
       leafCategoryId: String(categoryId),
-      name: cleanedName,
+      name: groupProductName,
       guideId,
       ...(effectiveBrand ? { brandName: effectiveBrand } : {}),
       taxType: 'TAX',
@@ -357,7 +364,8 @@ module.exports = async function handler(req, res) {
     const payload = { groupProduct: groupProductBody };
 
     console.log('[group-register] leafCategoryId:', String(categoryId),
-      '| name:', cleanedName,
+      '| name:', groupProductName,
+      '| fullName:', cleanedName,
       '| options:', allOpts.length,
       '| guideId:', guideId,
       '| stdOptions:', stdOptions.map((o) => `${o.optionName}(${o.optionId})`).join(','),
