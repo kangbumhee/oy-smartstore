@@ -588,6 +588,10 @@ const Register = {
     }).join('');
   },
 
+  _isGroupRequired(options = []) {
+    return Array.isArray(options) && options.length >= 2;
+  },
+
   async _submitRetryPayload(goodsNo, overrides = {}) {
     const ctx = this._getRetryContext(goodsNo);
     if (!ctx) {
@@ -596,7 +600,11 @@ const Register = {
     }
 
     const queueProduct = Storage.getQueue().find((p) => p.goodsNo === goodsNo) || {};
-    const useGroupRegister = overrides.forceNormal === true ? false : !!ctx.useGroupRegister;
+    const retryOptions = Array.isArray(ctx.options) ? ctx.options : [];
+    const mustKeepGroup = this._isGroupRequired(retryOptions);
+    const useGroupRegister = overrides.forceNormal === true
+      ? false
+      : (mustKeepGroup ? true : !!ctx.useGroupRegister);
     const regPayload = {
       name: overrides.name || ctx.name,
       sellingPrice: Number(overrides.sellingPrice || ctx.sellingPrice || 0),
@@ -647,8 +655,10 @@ const Register = {
           error: regData.error,
           invalidInputs: this._extractInvalidInputs(regData),
         };
-        UI.updateProgressStep(1, 'active', '그룹등록 실패 → 일반등록으로 즉시 전환...');
-        regData = await API.registerProduct(regPayload);
+        if (overrides.forceNormal === true) {
+          UI.updateProgressStep(1, 'active', '그룹등록 실패 → 선택하신 대로 일반등록으로 재시도...');
+          regData = await API.registerProduct(regPayload);
+        }
       }
 
       this.stopTimer();
@@ -718,7 +728,8 @@ const Register = {
         productAttributes: regPayload.productAttributes || [],
         lastError: errMsg,
         invalidInputs,
-        forceNormalRetry: useGroupRegister || !!ctx.forceNormalRetry,
+        forceNormalRetry: mustKeepGroup ? false : !!ctx.forceNormalRetry,
+        mustKeepGroup,
         groupFailureInfo: ctx.groupFailureInfo || groupFailureInfo,
       });
 
@@ -733,7 +744,8 @@ const Register = {
       this._saveRetryContext(goodsNo, {
         ...ctx,
         lastError: e.message,
-        forceNormalRetry: true,
+        forceNormalRetry: mustKeepGroup ? false : false,
+        mustKeepGroup,
       });
       UI.updateProgressStep(1, 'error', `재등록 오류 (${totalTime}초): ${String(e.message).substring(0, 100)}`);
       this._addCloseButton(totalTime, queueProduct.name || ctx.name || goodsNo, false, e.message, false, {
@@ -754,11 +766,13 @@ const Register = {
     const groupFailureMsg = ctx.groupFailureInfo
       ? this._extractRegisterErrorMessage(ctx.groupFailureInfo.error)
       : '';
-    const forceNormalChecked = ctx.forceNormalRetry !== false ? 'checked' : '';
+    const mustKeepGroup = !!ctx.mustKeepGroup || this._isGroupRequired(ctx.options);
+    const forceNormalChecked = ctx.forceNormalRetry === true ? 'checked' : '';
 
     UI.showModal(`
       <h3 style="margin:0 0 12px;">수동 수정 후 재시도</h3>
       <div style="font-size:12px;color:#64748b;margin-bottom:12px;">이미 생성한 이미지/설명/업로드 결과를 그대로 재사용합니다. 다시 AI 생성하지 않습니다.</div>
+      ${mustKeepGroup ? '<div style="margin-bottom:12px;padding:10px;border:1px solid #bfdbfe;background:#eff6ff;border-radius:8px;font-size:12px;color:#1d4ed8;">옵션이 2개 이상이면 기본은 <strong>그룹상품</strong> 재시도입니다. 그룹이 계속 실패하면 아래「일반상품 API로 재시도」를 체크한 뒤 재시도하세요 (네이버 옵션형 단일 상품).</div>' : ''}
 
       <div style="margin-bottom:12px;">
         <div style="font-size:12px;font-weight:700;color:#991b1b;margin-bottom:6px;">현재 오류</div>
@@ -795,7 +809,7 @@ const Register = {
 
       <label style="display:flex;align-items:center;gap:8px;margin:12px 0 16px;font-size:12px;color:#334155;cursor:pointer;">
         <input id="retry-force-normal" type="checkbox" ${forceNormalChecked} />
-        일반상품 API로 바로 재시도
+        일반상품 API로 재시도 (체크 시 그룹 대신 옵션형 단일 상품 등록)
       </label>
 
       <div style="display:flex;gap:8px;justify-content:flex-end;">
@@ -1204,7 +1218,7 @@ const Register = {
         }
       }
 
-      const useGroupRegister = allOpts.length > 0 && registrationOptions.length >= 1;
+      const useGroupRegister = registrationOptions.length >= 2;
       UI.updateProgressStep(2, 'active',
         useGroupRegister
           ? `③ 그룹상품 등록 중... (옵션 ${registrationOptions.length}개 → 개별 페이지)`
@@ -1234,6 +1248,7 @@ const Register = {
 
       let regData;
       let groupFailureInfo = null;
+      const mustKeepGroup = this._isGroupRequired(registrationOptions);
       if (useGroupRegister) {
         console.log('[등록] 그룹상품 등록 시도 (옵션', registrationOptions.length, '개)');
         try {
@@ -1250,9 +1265,8 @@ const Register = {
             error: regData.error,
             invalidInputs: this._extractInvalidInputs(regData),
           };
-          console.warn('[등록] 그룹등록 실패 → 일반등록 전환:', reason);
-          UI.updateProgressStep(2, 'active', '③ 그룹등록 실패 → 일반등록으로 전환...');
-          regData = await API.registerProduct(regPayload);
+          console.warn('[등록] 그룹등록 실패 → 자동 일반등록 안 함 (수동 선택):', reason);
+          UI.updateProgressStep(2, 'error', '③ 그룹등록 실패 — 「수동 수정 후 재시도」에서 속성/카테고리를 고치거나「일반상품 API」를 선택하세요');
         }
       } else {
         regData = await API.registerProduct(regPayload);
@@ -1344,12 +1358,16 @@ const Register = {
           optionThumbnailUploads: regPayload.optionThumbnailUploads || [],
           sharedOptionalUploads: regPayload.sharedOptionalUploads || [],
           useGroupRegister,
-          forceNormalRetry: !!groupFailureInfo || !useGroupRegister,
+          forceNormalRetry: false,
+          mustKeepGroup,
           lastError: errMsg,
           invalidInputs,
           groupFailureInfo,
         });
-        UI.updateProgressStep(2, 'error', `등록 실패 (${totalTime}초): ${errMsg.substring(0, 100)}`);
+        const failStep = groupFailureInfo
+          ? `③ 그룹등록 실패 (${totalTime}초): ${errMsg.substring(0, 90)} — 「수동 수정 후 재시도」버튼을 눌러 주세요`
+          : `등록 실패 (${totalTime}초): ${errMsg.substring(0, 100)}`;
+        UI.updateProgressStep(2, 'error', failStep);
         this._addCloseButton(totalTime, product.name, false, errMsg, false, {
           goodsNo,
           allowRetry: true,
