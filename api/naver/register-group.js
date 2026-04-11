@@ -7,6 +7,7 @@
 const { getAccessToken, getAuthHeadersFromToken, resolveCredentials, resolveToken, proxyFetch, NAVER_API_BASE } = require('../../lib/naver-auth');
 const { getProductNotice, AFTER_SERVICE_INFO, ORIGIN_AREA_INFO } = require('../../lib/delivery-template');
 const { resolveDeliveryProfile, buildDeliveryInfo, hasDeliveryProfileError } = require('../../lib/naver-delivery');
+const { buildStandardPurchaseOptionsForLabel, chooseBestGuide, sanitizeValueName } = require('../../lib/group-option-workbook');
 
 const GROUP_PRODUCTS_URL = `${NAVER_API_BASE}/v2/standard-group-products`;
 const GUIDE_URL = `${NAVER_API_BASE}/v2/standard-purchase-option-guides`;
@@ -98,39 +99,6 @@ async function fetchOptionGuide(headers, categoryId) {
     console.warn('[group] fetchOptionGuide error:', e.message);
     return { supported: false, reason: e.message };
   }
-}
-
-function sanitizeValueName(name) {
-  let clean = name.replace(/[^\uAC00-\uD7A3\u3131-\u3163a-zA-Z0-9\-_+/().,\s]/g, '');
-  clean = clean.replace(/\s{2,}/g, ' ').trim();
-  if (clean.length > 50) clean = clean.substring(0, 50).trim();
-  return clean || '기본';
-}
-
-function buildStandardPurchaseOptions(optName, stdOptions) {
-  const safeName = sanitizeValueName(optName);
-  if (!stdOptions || stdOptions.length === 0) {
-    return [{ valueName: safeName }];
-  }
-
-  return stdOptions.map((spo, idx) => {
-    if (idx === 0) {
-      return { optionId: spo.optionId, valueName: safeName };
-    }
-    const defaults = pickDefaultValue(spo);
-    return { optionId: spo.optionId, valueName: defaults };
-  });
-}
-
-function pickDefaultValue(spo) {
-  const values = spo.optionValues || [];
-  if (values.length > 0) return values[0].valueName;
-  const units = spo.optionUsableUnits || [];
-  if (units.length > 0) return '1' + units[0].unit;
-  const name = (spo.optionName || '').toLowerCase();
-  if (name.includes('수량') || name.includes('개수')) return '1개';
-  if (name.includes('용량')) return '1개';
-  return '1개';
 }
 
 const GROUP_STATUS_URL = `${NAVER_API_BASE}/v2/standard-group-products/status`;
@@ -251,7 +219,31 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    const { guideId, standardPurchaseOptions: stdOptions } = guide;
+    const pickedGuide = chooseBestGuide(
+      categoryId,
+      guide.allGuides || [],
+      allOpts.map((opt) => (opt?.name || opt?.optionName || '').trim()).filter(Boolean)
+    );
+    const selectedGuide = pickedGuide?.guide || { guideId: guide.guideId, standardPurchaseOptions: guide.standardPurchaseOptions };
+    const guideId = selectedGuide.guideId ?? selectedGuide.id ?? guide.guideId;
+    const stdOptions = selectedGuide.standardPurchaseOptions || guide.standardPurchaseOptions || [];
+
+    console.log('[group-register] workbook guide pick:',
+      JSON.stringify({
+        categoryId: String(categoryId),
+        pickedGuideId: guideId,
+        score: pickedGuide?.score ?? null,
+        maxCount: pickedGuide?.workbookInfo?.maxCount ?? null,
+        optionNames: stdOptions.map((o) => o.optionName),
+      }));
+
+    if (pickedGuide?.workbookInfo?.maxCount && allOpts.length > Number(pickedGuide.workbookInfo.maxCount)) {
+      return res.status(200).json({
+        success: false,
+        fallbackToNormal: true,
+        error: `카테고리(${categoryId}) 그룹상품 판매옵션 허용 개수(${pickedGuide.workbookInfo.maxCount}개)를 초과했습니다.`,
+      });
+    }
 
     const imageBlock = {};
     if (uploadedImages.length > 0 && uploadedImages[0]?.url) {
@@ -304,7 +296,7 @@ module.exports = async function handler(req, res) {
         images: imagesPayload,
         deliveryInfo: { ...deliveryInfo },
         originAreaInfo: ORIGIN_AREA_INFO,
-        standardPurchaseOptions: buildStandardPurchaseOptions(optName, stdOptions),
+        standardPurchaseOptions: buildStandardPurchaseOptionsForLabel(optName, stdOptions),
         smartstoreChannelProduct: {
           naverShoppingRegistration: true,
           channelProductDisplayStatusType: 'ON',
