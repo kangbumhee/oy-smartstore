@@ -1,6 +1,7 @@
 {
   "functions": {
     "api/image/studio.js": { "maxDuration": 120 },
+    "api/image/fetch-for-canvas.js": { "maxDuration": 60 },
     "api/naver/upload-image.js": { "maxDuration": 120 },
     "api/naver/register.js": { "maxDuration": 120 },
     "api/naver/register-group.js": { "maxDuration": 120 },

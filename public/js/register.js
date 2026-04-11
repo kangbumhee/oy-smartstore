@@ -3,6 +3,8 @@ const Register = {
   _timer: null,
   _startTime: 0,
   _retryContexts: {},
+  /** 재시도 모달: 옵션명 기반 속성 배열(옵션별). textarea 수정 시 null로 초기화 */
+  _retryEditorPerOptionAttrs: null,
   _categorySelectorState: null,
 
   render() {
@@ -108,13 +110,39 @@ const Register = {
     }
   },
 
+  /** 캔버스+toDataURL 시 crossOrigin으로 막히는 호스트(R2 등) */
+  _imageUrlNeedsCanvasProxy(url) {
+    const s = String(url || '');
+    if (!s || s.startsWith('data:')) return false;
+    try {
+      const u = new URL(s, window.location.origin);
+      if (u.origin === window.location.origin) return false;
+      const h = u.hostname.toLowerCase();
+      return h.endsWith('.r2.cloudflarestorage.com') || h.endsWith('.r2.dev');
+    } catch {
+      return false;
+    }
+  },
+
   async _cropImageBorder(imageUrl, cropPercent = 6) {
     const normalizedPercent = Math.max(0, Math.min(20, Number(cropPercent) || 0));
     if (!imageUrl || normalizedPercent <= 0) return imageUrl;
 
+    let loadUrl = imageUrl;
+    if (this._imageUrlNeedsCanvasProxy(imageUrl)) {
+      try {
+        const pr = await API.fetchImageForCanvas(imageUrl);
+        if (pr?.success && pr.dataUrl) loadUrl = pr.dataUrl;
+      } catch (e) {
+        console.warn('[crop] R2 CORS 우회 프록시 실패 — 원본 URL로 시도:', e.message || e);
+      }
+    }
+
     return new Promise((resolve) => {
       const img = new Image();
-      img.crossOrigin = 'anonymous';
+      if (!String(loadUrl).startsWith('data:')) {
+        img.crossOrigin = 'anonymous';
+      }
       img.onload = () => {
         try {
           const width = img.naturalWidth || img.width;
@@ -142,7 +170,7 @@ const Register = {
         }
       };
       img.onerror = () => resolve(imageUrl);
-      img.src = imageUrl;
+      img.src = loadUrl;
     });
   },
 
@@ -557,8 +585,15 @@ const Register = {
     }
 
     if (typeof errRaw === 'object') {
+      if (errRaw.error != null && typeof errRaw.errorMessage !== 'string') {
+        const fromNested = this._extractRegisterErrorMessage(errRaw.error, depth + 1);
+        if (fromNested && fromNested !== '알 수 없는 오류') return fromNested;
+      }
       if (typeof errRaw.errorMessage === 'string' && errRaw.errorMessage.trim()) {
         return errRaw.errorMessage.trim();
+      }
+      if (errRaw.errorMessage != null && typeof errRaw.errorMessage === 'object') {
+        return this._extractRegisterErrorMessage(errRaw.errorMessage, depth + 1);
       }
       if (typeof errRaw.message === 'string' && errRaw.message.trim()) {
         return errRaw.message.trim();
@@ -574,6 +609,9 @@ const Register = {
       }
       if (Array.isArray(errRaw.invalidInputs) && errRaw.invalidInputs.length > 0) {
         return this._extractRegisterErrorMessage(errRaw.invalidInputs, depth + 1);
+      }
+      if (errRaw.data != null) {
+        return this._extractRegisterErrorMessage(errRaw.data, depth + 1);
       }
       if (errRaw.progress != null) {
         return this._extractRegisterErrorMessage(errRaw.progress, depth + 1);
@@ -592,16 +630,41 @@ const Register = {
   },
 
   _clipErr(text, maxLen) {
-    const s = this._extractRegisterErrorMessage(text);
+    let s = this._extractRegisterErrorMessage(text);
+    if (typeof s !== 'string') s = String(s);
+    if (s === '[object Object]') s = '알 수 없는 오류(상세는 콘솔 참고)';
     return s.length > maxLen ? s.slice(0, maxLen) : s;
   },
 
-  /** 카테고리 속성 API 응답 → 네이버 productAttributes[] (PRIMARY만, 등록 로직과 동일) */
-  buildProductAttributesFromAttrData(attrData) {
+  /** 옵션명(향·색 등)과 속성값 라벨 매칭 — 그룹상품은 옵션마다 productAttributes가 달라질 수 있음 */
+  _pickAttributeValueForHint(vals, optionHint) {
+    const hint = String(optionHint || '').trim();
+    if (!hint || !Array.isArray(vals) || vals.length === 0) return vals[0] || null;
+    const norm = (x) => String(x || '').trim().toLowerCase().replace(/\s+/g, '');
+    const h = norm(hint);
+    for (const v of vals) {
+      const label = String(v.value || '').trim();
+      if (!label) continue;
+      const ln = norm(label);
+      if (h.includes(ln) || ln.includes(h) || hint.includes(label) || label.includes(hint)) {
+        return v;
+      }
+    }
+    return vals[0] || null;
+  },
+
+  /** 카테고리 속성 API 응답 → 네이버 productAttributes[] (필수 속성만, 앞에서부터 maxPrimary개까지) */
+  buildProductAttributesFromAttrData(attrData, opts = {}) {
+    const maxPrimary = opts.maxPrimary != null && Number.isFinite(opts.maxPrimary)
+      ? Math.max(0, Math.floor(opts.maxPrimary))
+      : Infinity;
     const productAttributes = [];
     const attrs = Array.isArray(attrData?.attributes) ? attrData.attributes : [];
+    let primaryCount = 0;
     for (const attr of attrs) {
       if (!attr.required) continue;
+      if (primaryCount >= maxPrimary) break;
+      primaryCount += 1;
       const vals = attr.values || [];
       const type = attr.type || 'SINGLE_SELECT';
       if (type === 'DIRECT_INPUT' || vals.length === 0) {
@@ -623,9 +686,10 @@ const Register = {
         productAttributes.push(row);
         continue;
       }
+      const chosen = this._pickAttributeValueForHint(vals, opts.optionHint) || vals[0];
       productAttributes.push({
         attributeSeq: attr.attributeSeq,
-        attributeValueSeq: vals[0].valueSeq,
+        attributeValueSeq: chosen.valueSeq,
       });
     }
     return productAttributes;
@@ -715,7 +779,8 @@ const Register = {
       return;
     }
     if (parsed.length === 0) {
-      previewEl.innerHTML = '<span style="color:#64748b;font-size:11px;">속성 없음 — 그룹/일부 카테고리에서 연관 오류가 나면「속성 다시 채우기」를 눌러 보세요.</span>';
+      previewEl.innerHTML =
+        '<span style="color:#64748b;font-size:11px;">속성 없음 — 재시도 시 서버가 옵션별 <code>productAttributes: []</code>를 네이버에 명시 전송합니다. 이전에는 키가 빠져 같은 오류가 반복될 수 있었습니다. 그래도 실패하면「필수 1개만」 또는「속성 다시 채우기」를 시도하세요.</span>';
       return;
     }
     if (!cat) {
@@ -810,22 +875,38 @@ const Register = {
     const useGroupRegister = overrides.forceNormal === true
       ? false
       : (mustKeepGroup ? true : !!ctx.useGroupRegister);
-    const regPayload = {
-      name: overrides.name || ctx.name,
-      sellingPrice: Number(overrides.sellingPrice || ctx.sellingPrice || 0),
-      categoryId: String(overrides.categoryId || ctx.categoryId || ''),
-      detailHtml: overrides.detailHtml || ctx.detailHtml || '',
-      uploadedImages: Array.isArray(ctx.uploadedImages) ? ctx.uploadedImages : [],
-      options: Array.isArray(ctx.options) ? ctx.options : [],
-      stock: Number(ctx.stock || 999),
-      brand: ctx.brand || '',
-      oliveyoungCategory: ctx.oliveyoungCategory || '',
-      sellerTags: Array.isArray(ctx.sellerTags) ? ctx.sellerTags : [],
-      brandName: ctx.brandName || undefined,
-      manufacturerName: ctx.manufacturerName || undefined,
-      productAttributes: Array.isArray(overrides.productAttributes) ? overrides.productAttributes : (Array.isArray(ctx.productAttributes) ? ctx.productAttributes : undefined),
-      deliveryProfile: ctx.deliveryProfile || undefined,
-    };
+      const byOptRetry = Array.isArray(overrides.productAttributesByOption) && overrides.productAttributesByOption.length > 0
+        ? overrides.productAttributesByOption
+        : (Array.isArray(ctx.productAttributesByOption) && ctx.productAttributesByOption.length > 0
+          ? ctx.productAttributesByOption
+          : null);
+
+      const regPayload = {
+        name: overrides.name || ctx.name,
+        sellingPrice: Number(overrides.sellingPrice || ctx.sellingPrice || 0),
+        categoryId: String(overrides.categoryId || ctx.categoryId || ''),
+        detailHtml: overrides.detailHtml || ctx.detailHtml || '',
+        uploadedImages: Array.isArray(ctx.uploadedImages) ? ctx.uploadedImages : [],
+        options: Array.isArray(ctx.options) ? ctx.options : [],
+        stock: Number(ctx.stock || 999),
+        brand: ctx.brand || '',
+        oliveyoungCategory: ctx.oliveyoungCategory || '',
+        sellerTags: Array.isArray(ctx.sellerTags) ? ctx.sellerTags : [],
+        brandName: ctx.brandName || undefined,
+        manufacturerName: ctx.manufacturerName || undefined,
+        deliveryProfile: ctx.deliveryProfile || undefined,
+      };
+
+      if (byOptRetry && useGroupRegister) {
+        regPayload.productAttributesByOption = byOptRetry;
+      } else if (byOptRetry && !useGroupRegister) {
+        regPayload.productAttributes = Array.isArray(byOptRetry[0]) ? byOptRetry[0] : [];
+      } else {
+        const pa = Array.isArray(overrides.productAttributes)
+          ? overrides.productAttributes
+          : (Array.isArray(ctx.productAttributes) ? ctx.productAttributes : undefined);
+        if (pa !== undefined) regPayload.productAttributes = pa;
+      }
 
     if (Array.isArray(ctx.optionThumbnailUploads) && ctx.optionThumbnailUploads.length > 0) {
       regPayload.optionThumbnailUploads = ctx.optionThumbnailUploads;
@@ -924,14 +1005,15 @@ const Register = {
         return;
       }
 
-      const errMsg = this._extractRegisterErrorMessage(regData.error);
+      const errMsg = this._extractRegisterErrorMessage(regData.error ?? regData.message ?? regData);
       const mergedGi = groupFailureInfo || ctx.groupFailureInfo;
       const invalidInputs = this._mergeInvalidInputs(regData, mergedGi ? { error: mergedGi.error } : null);
       this._saveRetryContext(goodsNo, {
         ...ctx,
         detailHtml: regPayload.detailHtml,
         categoryId: regPayload.categoryId,
-        productAttributes: regPayload.productAttributes || [],
+        productAttributes: regPayload.productAttributes !== undefined ? regPayload.productAttributes : (ctx.productAttributes || []),
+        productAttributesByOption: regPayload.productAttributesByOption || ctx.productAttributesByOption,
         lastError: errMsg,
         invalidInputs,
         forceNormalRetry: mustKeepGroup ? false : !!ctx.forceNormalRetry,
@@ -968,6 +1050,12 @@ const Register = {
       return;
     }
 
+    const hasStoredByOption = Array.isArray(ctx.productAttributesByOption) && ctx.productAttributesByOption.length > 0;
+    this._retryEditorPerOptionAttrs = hasStoredByOption
+      ? ctx.productAttributesByOption.map((row) => (Array.isArray(row) ? row.map((a) => ({ ...a })) : []))
+      : null;
+    const attrJsonSeed = hasStoredByOption ? (ctx.productAttributesByOption[0] || []) : (ctx.productAttributes || []);
+
     const invalidInputsHtml = this._formatInvalidInputsHtml(ctx.invalidInputs);
     const groupFailureMsg = ctx.groupFailureInfo
       ? this._extractRegisterErrorMessage(ctx.groupFailureInfo.error)
@@ -998,8 +1086,8 @@ const Register = {
 
       <div style="margin-bottom:12px;padding:10px;border:1px solid #e0e7ff;background:#f5f7ff;border-radius:8px;font-size:12px;color:#3730a3;line-height:1.55;">
         <strong>연관 속성 오류가 날 때</strong><br/>
-        숫자만 있는 JSON은 사람이 고치기 어렵습니다. 아래 <strong>「속성 다시 채우기」</strong>를 누르면 현재 카테고리 ID 기준으로 네이버 API에서 필수(PRIMARY) 속성을 다시 받아, 첫 허용값으로 덮어씁니다.
-        그래도 실패하면 스마트스토어 센터에서 같은 카테고리 상품의 속성 조합을 참고하거나, <strong>일반상품 API</strong>로 우회해 보세요.
+        네이버 그룹상품은 <strong>옵션(판매조합)마다</strong> <code>productAttributes</code>를 넣습니다. 향·색 등 옵션명이 다르면 <strong>모든 옵션에 똑같은 속성</strong>을 넣으면 연관 오류가 날 수 있습니다. 그럴 때는 <strong>「옵션명 반영 채우기」</strong>로 옵션별로 다시 생성하세요.<br/>
+        「속성 다시 채우기」는 동일 속성을 모든 옵션에 복사합니다. 「속성 비우기」는 빈 배열을 명시합니다. 계속 실패하면 <strong>일반상품 API</strong> 또는 카테고리 변경을 검토하세요.
       </div>
 
       <div style="margin-bottom:12px;">
@@ -1016,12 +1104,16 @@ const Register = {
         <button type="button" class="btn btn-outline btn-sm" id="retry-sanitize-detail">금칙어 자동 치환</button>
       </div>
 
-      <label style="display:block;font-size:12px;font-weight:700;color:#334155;margin-bottom:6px;">속성값 JSON (API 그대로 · 수정 어렵다면 아래 버튼 사용)</label>
-      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+      <label style="display:block;font-size:12px;font-weight:700;color:#334155;margin-bottom:6px;">속성값 JSON (1번 옵션 예시 · 옵션별 전송 시 아래 버튼 우선)</label>
+      ${hasStoredByOption ? '<div style="font-size:11px;color:#0369a1;margin:-4px 0 8px;">저장됨: 옵션별 속성 배열 — textarea는 첫 옵션만 표시합니다. 내용을 직접 고치면 옵션별 모드가 해제됩니다.</div>' : ''}
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;align-items:center;">
+        <button type="button" class="btn btn-primary btn-sm" id="retry-refill-attrs-per-opt">옵션명 반영 채우기</button>
         <button type="button" class="btn btn-primary btn-sm" id="retry-refill-attrs">속성 다시 채우기</button>
+        <button type="button" class="btn btn-outline btn-sm" id="retry-refill-attrs-1" title="필수 속성 앞에서 1건만 (연관 조합 완화)">필수 1개만</button>
+        <button type="button" class="btn btn-outline btn-sm" id="retry-refill-attrs-3" title="필수 속성 앞에서 3건만">필수 3개만</button>
         <button type="button" class="btn btn-outline btn-sm" id="retry-clear-attrs">속성 비우기 ([])</button>
       </div>
-      <textarea id="retry-attributes-json" style="width:100%;height:160px;padding:10px;border:1px solid #cbd5e1;border-radius:8px;font-size:12px;line-height:1.5;">${this._escHtml(JSON.stringify(ctx.productAttributes || [], null, 2))}</textarea>
+      <textarea id="retry-attributes-json" style="width:100%;height:160px;padding:10px;border:1px solid #cbd5e1;border-radius:8px;font-size:12px;line-height:1.5;">${this._escHtml(JSON.stringify(attrJsonSeed, null, 2))}</textarea>
       <div style="margin:8px 0 12px;padding:10px;border:1px dashed #cbd5e1;border-radius:8px;background:#fafafa;">
         <div style="font-size:11px;font-weight:700;color:#64748b;margin-bottom:6px;">읽기 쉬운 미리보기</div>
         <div id="retry-attr-preview"></div>
@@ -1054,6 +1146,22 @@ const Register = {
 
     if (submitBtn) {
       submitBtn.onclick = async () => {
+        const base = {
+          categoryId: categoryEl?.value || ctx.categoryId,
+          detailHtml: detailEl?.value || ctx.detailHtml,
+          forceNormal: !!forceNormalEl?.checked,
+        };
+
+        if (this._retryEditorPerOptionAttrs && this._retryEditorPerOptionAttrs.length > 0) {
+          await this._submitRetryPayload(goodsNo, {
+            ...base,
+            productAttributesByOption: this._retryEditorPerOptionAttrs.map((row) =>
+              (Array.isArray(row) ? row.map((a) => ({ ...a })) : [])
+            ),
+          });
+          return;
+        }
+
         let parsedAttributes = [];
         try {
           parsedAttributes = JSON.parse(attrsEl?.value || '[]');
@@ -1064,48 +1172,97 @@ const Register = {
         }
 
         await this._submitRetryPayload(goodsNo, {
-          categoryId: categoryEl?.value || ctx.categoryId,
-          detailHtml: detailEl?.value || ctx.detailHtml,
+          ...base,
           productAttributes: parsedAttributes,
-          forceNormal: !!forceNormalEl?.checked,
         });
       };
     }
 
+    const perOptBtn = document.getElementById('retry-refill-attrs-per-opt');
     const refillBtn = document.getElementById('retry-refill-attrs');
+    const refill1Btn = document.getElementById('retry-refill-attrs-1');
+    const refill3Btn = document.getElementById('retry-refill-attrs-3');
     const clearBtn = document.getElementById('retry-clear-attrs');
     let previewTimer = null;
     const schedPreview = () => {
       clearTimeout(previewTimer);
       previewTimer = setTimeout(() => this._refreshRetryAttributePreview(), 350);
     };
-    if (attrsEl) attrsEl.addEventListener('input', schedPreview);
+    if (attrsEl) {
+      attrsEl.addEventListener('input', () => {
+        this._retryEditorPerOptionAttrs = null;
+        schedPreview();
+      });
+    }
     if (categoryEl) categoryEl.addEventListener('input', schedPreview);
 
-    if (refillBtn && attrsEl && categoryEl) {
-      refillBtn.onclick = async () => {
+    if (perOptBtn && attrsEl && categoryEl) {
+      perOptBtn.onclick = async () => {
         const cat = categoryEl.value.trim();
         if (!cat) {
           UI.showToast('먼저 카테고리 ID를 입력하세요', 'error');
           return;
         }
-        refillBtn.disabled = true;
+        const opts = Array.isArray(ctx.options) ? ctx.options : [];
+        if (opts.length < 2) {
+          UI.showToast('옵션이 1개뿐이면「속성 다시 채우기」를 쓰면 됩니다', 'info');
+          return;
+        }
+        perOptBtn.disabled = true;
         try {
           await API.obtainNaverToken(15);
           const attrData = await API.getCategoryAttributes(cat);
-          const built = this.buildProductAttributesFromAttrData(attrData);
-          attrsEl.value = JSON.stringify(built, null, 2);
+          const builtPer = opts.map((opt) => this.buildProductAttributesFromAttrData(attrData, {
+            optionHint: (opt.name || opt.optionName || '').trim(),
+          }));
+          this._retryEditorPerOptionAttrs = builtPer;
+          attrsEl.value = JSON.stringify(builtPer[0] || [], null, 2);
           await this._refreshRetryAttributePreview();
-          UI.showToast(`필수 속성 ${built.length}건으로 다시 채웠습니다`, 'success');
+          UI.showToast(`옵션 ${builtPer.length}개 각각 속성 생성(옵션명 매칭). 재시도 시 옵션별로 전송합니다.`, 'success', 3500);
         } catch (e) {
           UI.showToast('속성 조회 실패: ' + String(e.message || e), 'error');
         } finally {
-          refillBtn.disabled = false;
+          perOptBtn.disabled = false;
         }
       };
     }
+
+    const runRetryRefill = async (maxPrimary, label) => {
+      const cat = categoryEl.value.trim();
+      if (!cat) {
+        UI.showToast('먼저 카테고리 ID를 입력하세요', 'error');
+        return;
+      }
+      const btns = [refillBtn, refill1Btn, refill3Btn, perOptBtn].filter(Boolean);
+      btns.forEach((b) => { b.disabled = true; });
+      try {
+        await API.obtainNaverToken(15);
+        const attrData = await API.getCategoryAttributes(cat);
+        const opts = maxPrimary != null ? { maxPrimary } : {};
+        this._retryEditorPerOptionAttrs = null;
+        const built = this.buildProductAttributesFromAttrData(attrData, opts);
+        attrsEl.value = JSON.stringify(built, null, 2);
+        await this._refreshRetryAttributePreview();
+        UI.showToast(`${label}: 필수 속성 ${built.length}건`, 'success');
+      } catch (e) {
+        UI.showToast('속성 조회 실패: ' + String(e.message || e), 'error');
+      } finally {
+        btns.forEach((b) => { b.disabled = false; });
+      }
+    };
+
+    if (refillBtn && attrsEl && categoryEl) {
+      refillBtn.onclick = () => runRetryRefill(null, '전체 필수');
+    }
+    if (refill1Btn && attrsEl && categoryEl) {
+      refill1Btn.onclick = () => runRetryRefill(1, '필수 1개만');
+    }
+    if (refill3Btn && attrsEl && categoryEl) {
+      refill3Btn.onclick = () => runRetryRefill(3, '필수 3개만');
+    }
     if (clearBtn && attrsEl) {
       clearBtn.onclick = async () => {
+        this._retryEditorPerOptionAttrs = null;
         attrsEl.value = '[]';
         await this._refreshRetryAttributePreview();
         UI.showToast('속성을 비웠습니다 (빈 배열)', 'info', 2000);
@@ -1471,9 +1628,26 @@ const Register = {
         sellerTags,
         brandName: brandName || undefined,
         manufacturerName: manufacturerName || undefined,
-        productAttributes: productAttributes.length > 0 ? productAttributes : undefined,
         deliveryProfile,
       };
+
+      if (useGroupRegister && registrationOptions.length >= 2 && productAttributes.length > 0) {
+        const perOptAttrs = registrationOptions.map((opt) =>
+          this.buildProductAttributesFromAttrData(attrData, {
+            optionHint: (opt.name || opt.optionName || '').trim(),
+          })
+        );
+        const ser = (a) => JSON.stringify(a);
+        const allSame = perOptAttrs.every((p) => ser(p) === ser(perOptAttrs[0]));
+        if (!allSame) {
+          regPayload.productAttributesByOption = perOptAttrs;
+          console.log('[등록] 그룹상품 — 옵션별 속성 상이 → productAttributesByOption', perOptAttrs.length, '개 전송');
+        } else {
+          regPayload.productAttributes = productAttributes;
+        }
+      } else if (productAttributes.length > 0) {
+        regPayload.productAttributes = productAttributes;
+      }
 
       if (useGroupRegister && registrationOptions.length > 0 && thumbUploads.length > 0) {
         regPayload.optionThumbnailUploads = thumbUploads;
@@ -1564,7 +1738,7 @@ const Register = {
         Storage.removeFromQueue(goodsNo);
         this._addCloseButton(totalTime, cleanedBaseName, true, null, isGroup);
       } else {
-        const errRaw = regData.error;
+        const errRaw = regData.error ?? regData.message ?? regData;
         const errMsg = this._extractRegisterErrorMessage(errRaw);
         const invalidInputs = this._mergeInvalidInputs(regData, groupFailureInfo);
         console.error('[등록 실패 상세]', errRaw);
@@ -1587,7 +1761,10 @@ const Register = {
           sellerTags,
           brandName: brandName || undefined,
           manufacturerName: manufacturerName || undefined,
-          productAttributes: productAttributes.length > 0 ? productAttributes : [],
+          productAttributes: regPayload.productAttributes !== undefined
+            ? regPayload.productAttributes
+            : (!regPayload.productAttributesByOption && productAttributes.length > 0 ? productAttributes : []),
+          productAttributesByOption: regPayload.productAttributesByOption,
           deliveryProfile,
           optionThumbnailUploads: regPayload.optionThumbnailUploads || [],
           sharedOptionalUploads: regPayload.sharedOptionalUploads || [],

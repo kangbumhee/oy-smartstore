@@ -112,6 +112,10 @@ const API = {
   async registerProduct(data) { return this.post('/api/naver/register', data, true); },
   async registerGroupProduct(data) { return this.post('/api/naver/register-group', data, true); },
   async uploadImages(imageUrls) { return this.post('/api/naver/upload-image', { imageUrls }, true); },
+  /** R2 등 CORS 없는 URL → 서버 경유 data URL (캔버스 크롭용) */
+  async fetchImageForCanvas(imageUrl) {
+    return this.post('/api/image/fetch-for-canvas', { url: imageUrl }, false);
+  },
   async getCategories(params) { return this.get(`/api/naver/categories?${new URLSearchParams(params)}`, true); },
   async getBestCategory(oyCategory, productName) {
     return this.get(`/api/naver/categories?mode=best-match&oyCategory=${encodeURIComponent(oyCategory)}&productName=${encodeURIComponent(productName)}`, true);

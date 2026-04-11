@@ -11,6 +11,61 @@ const { buildStandardPurchaseOptionsForLabel, chooseBestGuide, sanitizeValueName
 
 const GROUP_PRODUCTS_URL = `${NAVER_API_BASE}/v2/standard-group-products`;
 const GUIDE_URL = `${NAVER_API_BASE}/v2/standard-purchase-option-guides`;
+const ATTR_META_URL = `${NAVER_API_BASE}/v1/product-attributes/attributes`;
+
+async function fetchAttributeSeqToNameMap(headers, categoryId) {
+  const url = `${ATTR_META_URL}?categoryId=${encodeURIComponent(String(categoryId).trim())}`;
+  try {
+    const r = await proxyFetch(url, {
+      headers: { ...headers, Accept: 'application/json;charset=UTF-8' },
+    });
+    if (!r.ok) return new Map();
+    const arr = await r.json();
+    if (!Array.isArray(arr)) return new Map();
+    const m = new Map();
+    for (const row of arr) {
+      if (row?.attributeSeq != null) {
+        m.set(Number(row.attributeSeq), String(row.attributeName || '').trim());
+      }
+    }
+    return m;
+  } catch (e) {
+    console.warn('[group-register] attribute meta fetch failed:', e.message);
+    return new Map();
+  }
+}
+
+function normalizeAttrAxisToken(s) {
+  return String(s || '').trim().toLowerCase().replace(/\s+/g, '');
+}
+
+/** 스마트스토어 센터: 판매옵션과 겹치는 상품속성은 옵션으로만 관리 → API 중복이 연관 속성 오류 유발 */
+function attributeNameOverlapsSaleAxis(attrName, axisNames) {
+  const n = normalizeAttrAxisToken(attrName);
+  if (!n) return false;
+  for (const raw of axisNames) {
+    const a = normalizeAttrAxisToken(raw);
+    if (!a) continue;
+    if (n === a) return true;
+    if (a.length >= 2) {
+      if ((a === '용량' || a === '중량') && n.includes('용기')) continue;
+      if (n.includes(a)) return true;
+    } else if (n.startsWith(a) && n.length > a.length) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function filterProductAttributesBySaleAxes(rows, seqToName, axisNames) {
+  if (!Array.isArray(rows) || rows.length === 0 || !axisNames.length) return rows;
+  return rows.filter((row) => {
+    const seq = row?.attributeSeq;
+    const name = seqToName.get(Number(seq)) || '';
+    if (!name) return true;
+    return !attributeNameOverlapsSaleAxis(name, axisNames);
+  });
+}
 
 /** 비동기 ERROR 응답에서 invalidInputs를 모아 프론트에 넘김 */
 function collectInvalidInputsFromPollFinal(final) {
@@ -197,9 +252,20 @@ module.exports = async function handler(req, res) {
     sharedOptionalUploads = [],
     sellerTags = [],
     brandId, brandName: reqBrandName, manufacturerId, manufacturerName: reqManufacturerName,
-    productAttributes = [],
     deliveryProfile = null,
   } = body;
+
+  const hasProductAttributesKey = Object.prototype.hasOwnProperty.call(body, 'productAttributes');
+  const productAttributesRaw = body.productAttributes;
+  const productAttributes = hasProductAttributesKey
+    ? (Array.isArray(productAttributesRaw) ? productAttributesRaw : [])
+    : undefined;
+
+  const rawByOpt = body.productAttributesByOption;
+  const productAttributesByOption = Array.isArray(rawByOpt)
+    ? rawByOpt.map((row) => (Array.isArray(row) ? row : []))
+    : null;
+  const useAttributesByOption = !!(productAttributesByOption && productAttributesByOption.length > 0);
 
   const effectiveBrand = String(brand || reqBrandName || '').trim();
   const effectiveManufacturer = String(reqManufacturerName || effectiveBrand || '').trim();
@@ -295,11 +361,54 @@ module.exports = async function handler(req, res) {
     const thumbList = Array.isArray(optionThumbnailUploads) ? optionThumbnailUploads : [];
     const sharedList = Array.isArray(sharedOptionalUploads) ? sharedOptionalUploads : [];
 
-    const attrList = Array.isArray(productAttributes) && productAttributes.length > 0
-      ? productAttributes.map((a) => ({ ...a }))
-      : [];
+    const saleAxisNames = stdOptions.map((o) => String(o.optionName || '').trim()).filter(Boolean);
+    let seqToName = new Map();
+    const needsAxisAttrFilter = saleAxisNames.length > 0 && (hasProductAttributesKey || useAttributesByOption);
+    if (needsAxisAttrFilter) {
+      seqToName = await fetchAttributeSeqToNameMap(headers, categoryId);
+      if (seqToName.size > 0) {
+        console.log('[group-register] 판매옵션 축:', saleAxisNames.join(', '), '— 축과 겹치는 상품속성은 전송에서 제외');
+      }
+    }
+
+    const attrsForSkuIndex = (index) => {
+      let rows = null;
+      if (useAttributesByOption) {
+        const row = productAttributesByOption[index] !== undefined
+          ? productAttributesByOption[index]
+          : (productAttributesByOption[0] || []);
+        rows = Array.isArray(row) ? row.map((a) => ({ ...a })) : [];
+      } else if (productAttributes !== undefined) {
+        rows = productAttributes.map((a) => ({ ...a }));
+      } else {
+        return null;
+      }
+      if (rows.length > 0 && seqToName.size > 0 && saleAxisNames.length > 0) {
+        const filtered = filterProductAttributesBySaleAxes(rows, seqToName, saleAxisNames);
+        if (filtered.length !== rows.length) {
+          console.log('[group-register] productAttributes', rows.length - filtered.length, '건 제거 (판매옵션 축과 중복)');
+        }
+        rows = filtered;
+      }
+      return rows;
+    };
+
+    if (useAttributesByOption) {
+      console.log(
+        '[group-register] productAttributesByOption:',
+        productAttributesByOption.length,
+        'entries (per 옵션 행; 향/색 등 옵션별 상이할 때 사용)'
+      );
+    } else if (hasProductAttributesKey) {
+      console.log(
+        '[group-register] productAttributes from client:',
+        productAttributes.length,
+        'row(s) per SKU (explicit empty clears attrs on each option row)'
+      );
+    }
 
     const specificProducts = allOpts.map((opt, index) => {
+      const paRows = attrsForSkuIndex(index);
       let optName = sanitizeValueName((opt.name || opt.optionName || '').trim());
 
       const optPrice = parseInt(opt.sellingPrice || opt.price || 0, 10);
@@ -338,9 +447,7 @@ module.exports = async function handler(req, res) {
           naverShoppingRegistration: true,
           channelProductDisplayStatusType: 'ON',
         },
-        ...(attrList.length > 0
-          ? { productAttributes: attrList.map((a) => ({ ...a })) }
-          : {}),
+        ...(paRows !== null ? { productAttributes: paRows } : {}),
       };
     });
 
@@ -386,8 +493,9 @@ module.exports = async function handler(req, res) {
       console.log('[group-register] brand:', effectiveBrand, '| manufacturer:', effectiveManufacturer);
     }
 
-    if (attrList.length > 0) {
-      console.log('[group-register] attributes (per specificProduct):', attrList.length, '건 ×', specificProducts.length, '옵션');
+    if (useAttributesByOption || (hasProductAttributesKey && productAttributes.length > 0)) {
+      const n = useAttributesByOption ? 'by-option' : productAttributes.length;
+      console.log('[group-register] attributes (per specificProduct):', n, '×', specificProducts.length, '옵션');
     }
 
     const payload = { groupProduct: groupProductBody };
