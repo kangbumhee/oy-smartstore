@@ -2,6 +2,7 @@
 const Register = {
   _timer: null,
   _startTime: 0,
+  _retryContexts: {},
 
   render() {
     const queue = Storage.getQueue();
@@ -391,6 +392,304 @@ const Register = {
     if (saved) this._applyCategory(goodsNo, saved.id, saved.name);
   },
 
+  _extractRegisterErrorMessage(errRaw) {
+    if (typeof errRaw === 'string') return errRaw;
+    if (errRaw?.message) return errRaw.message;
+    if (errRaw?.raw) return errRaw.raw;
+    try {
+      return JSON.stringify(errRaw || '알 수 없는 오류');
+    } catch {
+      return '알 수 없는 오류';
+    }
+  },
+
+  _extractInvalidInputs(regData) {
+    return regData?.invalidInputs || regData?.error?.invalidInputs || regData?.error?.progress?.invalidInputs || [];
+  },
+
+  _saveRetryContext(goodsNo, context) {
+    if (!goodsNo || !context) return;
+    this._retryContexts[goodsNo] = {
+      ...context,
+      savedAt: Date.now(),
+    };
+  },
+
+  _getRetryContext(goodsNo) {
+    return this._retryContexts[goodsNo] || null;
+  },
+
+  _clearRetryContext(goodsNo) {
+    delete this._retryContexts[goodsNo];
+  },
+
+  _sanitizeDetailContent(html) {
+    return String(html || '')
+      .replace(/피부색상/gi, '피부 톤')
+      .replace(/피부 색상/gi, '피부 톤');
+  },
+
+  _formatInvalidInputsHtml(invalidInputs) {
+    if (!Array.isArray(invalidInputs) || invalidInputs.length === 0) {
+      return '<div style="font-size:12px;color:#64748b;">상세 오류 목록이 없습니다.</div>';
+    }
+    return invalidInputs.map((item) => {
+      const name = this._escHtml(item?.name || '-');
+      const message = this._escHtml(item?.message || item?.type || '오류');
+      return `<div style="padding:8px 10px;border:1px solid #fecaca;background:#fff7f7;border-radius:8px;font-size:12px;color:#991b1b;margin-bottom:6px;">
+        <div style="font-weight:600;">${name}</div>
+        <div>${message}</div>
+      </div>`;
+    }).join('');
+  },
+
+  async _submitRetryPayload(goodsNo, overrides = {}) {
+    const ctx = this._getRetryContext(goodsNo);
+    if (!ctx) {
+      UI.showToast('재시도 가능한 임시 데이터가 없습니다. 다시 등록을 시도해 주세요.', 'error');
+      return;
+    }
+
+    const queueProduct = Storage.getQueue().find((p) => p.goodsNo === goodsNo) || {};
+    const useGroupRegister = overrides.forceNormal === true ? false : !!ctx.useGroupRegister;
+    const regPayload = {
+      name: overrides.name || ctx.name,
+      sellingPrice: Number(overrides.sellingPrice || ctx.sellingPrice || 0),
+      categoryId: String(overrides.categoryId || ctx.categoryId || ''),
+      detailHtml: overrides.detailHtml || ctx.detailHtml || '',
+      uploadedImages: Array.isArray(ctx.uploadedImages) ? ctx.uploadedImages : [],
+      options: Array.isArray(ctx.options) ? ctx.options : [],
+      stock: Number(ctx.stock || 999),
+      brand: ctx.brand || '',
+      oliveyoungCategory: ctx.oliveyoungCategory || '',
+      sellerTags: Array.isArray(ctx.sellerTags) ? ctx.sellerTags : [],
+      brandName: ctx.brandName || undefined,
+      manufacturerName: ctx.manufacturerName || undefined,
+      productAttributes: Array.isArray(overrides.productAttributes) ? overrides.productAttributes : (Array.isArray(ctx.productAttributes) ? ctx.productAttributes : undefined),
+      deliveryProfile: ctx.deliveryProfile || undefined,
+    };
+
+    if (Array.isArray(ctx.optionThumbnailUploads) && ctx.optionThumbnailUploads.length > 0) {
+      regPayload.optionThumbnailUploads = ctx.optionThumbnailUploads;
+    }
+    if (Array.isArray(ctx.sharedOptionalUploads) && ctx.sharedOptionalUploads.length > 0) {
+      regPayload.sharedOptionalUploads = ctx.sharedOptionalUploads;
+    }
+
+    UI.hideModal();
+    UI.showProgress([
+      { status: 'active', label: '저장된 이미지/설명 재사용 중...' },
+      { status: 'wait', label: '스마트스토어 재등록 중...' },
+    ]);
+    this.startTimer();
+
+    try {
+      await API.obtainNaverToken(15);
+      UI.updateProgressStep(0, 'done', '저장된 이미지/설명 재사용 준비 완료');
+      UI.updateProgressStep(1, 'active', useGroupRegister ? '그룹상품 재등록 중...' : '일반상품 재등록 중...');
+
+      let regData = useGroupRegister
+        ? await API.registerGroupProduct(regPayload)
+        : await API.registerProduct(regPayload);
+
+      let groupFailureInfo = null;
+      if (useGroupRegister && !regData.success) {
+        groupFailureInfo = {
+          error: regData.error,
+          invalidInputs: this._extractInvalidInputs(regData),
+        };
+        UI.updateProgressStep(1, 'active', '그룹등록 실패 → 일반등록으로 즉시 전환...');
+        regData = await API.registerProduct(regPayload);
+      }
+
+      this.stopTimer();
+      const totalTime = ((Date.now() - this._startTime) / 1000).toFixed(1);
+      const isGroup = regData.isGroup === true;
+
+      if (regData.success) {
+        UI.updateProgressStep(1, 'done', isGroup ? `그룹상품 재등록 완료 (${totalTime}초)` : `재등록 완료 (${totalTime}초)`);
+
+        const registered = {
+          goodsNo,
+          name: ctx.cleanedBaseName || queueProduct.name || ctx.name,
+          brand: queueProduct.brand || ctx.brand || '',
+          thumbnail: queueProduct.thumbnail || '',
+          oyPrice: Margin.resolveProductPrice(queueProduct, queueProduct.options || ctx.options || []),
+          sellingPrice: regPayload.sellingPrice,
+          marginRate: queueProduct.marginRate || 15,
+          categoryId: regPayload.categoryId,
+          categoryName: ctx.categoryName || '',
+          isGroup,
+        };
+
+        if (isGroup) {
+          registered.groupProductNo = regData.groupProductNo || '';
+          registered.requestId = regData.requestId || '';
+          const pNos = Array.isArray(regData.productNos) ? regData.productNos : [];
+          const enrichedProductNos = pNos.map((item, idx) => {
+            const opt = regPayload.options[idx] || {};
+            const stockQuantity = Math.max(0, parseInt(opt.stockQuantity ?? opt.quantity ?? 0, 10) || 0);
+            return {
+              ...item,
+              optionName: (opt.name || opt.optionName || '').trim(),
+              optionNumber: opt.optionNumber || '',
+              stockQuantity,
+              usable: stockQuantity > 0 && opt.soldOut !== true && opt.soldOutFlag !== 'Y',
+            };
+          });
+          registered.productNo = enrichedProductNos[0]?.originProductNo || '';
+          registered.channelProductNo = enrichedProductNos[0]?.smartstoreChannelProductNo || '';
+          registered.productNos = enrichedProductNos;
+          registered.syncedOptions = regPayload.options.map((opt) => {
+            const stockQuantity = Math.max(0, parseInt(opt.stockQuantity ?? opt.quantity ?? 0, 10) || 0);
+            return {
+              name: (opt.name || opt.optionName || '').trim(),
+              stock: stockQuantity,
+              usable: stockQuantity > 0 && opt.soldOut !== true && opt.soldOutFlag !== 'Y',
+            };
+          });
+        } else {
+          registered.productNo = regData.result?.originProductNo || '';
+          registered.channelProductNo = regData.result?.smartstoreChannelProductNo || '';
+        }
+
+        Storage.addRegistered(registered);
+        Storage.removeFromQueue(goodsNo);
+        this._clearRetryContext(goodsNo);
+        this._addCloseButton(totalTime, registered.name, true, null, isGroup);
+        return;
+      }
+
+      const errMsg = this._extractRegisterErrorMessage(regData.error);
+      const invalidInputs = this._extractInvalidInputs(regData);
+      this._saveRetryContext(goodsNo, {
+        ...ctx,
+        detailHtml: regPayload.detailHtml,
+        categoryId: regPayload.categoryId,
+        productAttributes: regPayload.productAttributes || [],
+        lastError: errMsg,
+        invalidInputs,
+        forceNormalRetry: useGroupRegister || !!ctx.forceNormalRetry,
+        groupFailureInfo: ctx.groupFailureInfo || groupFailureInfo,
+      });
+
+      UI.updateProgressStep(1, 'error', `재등록 실패 (${totalTime}초): ${errMsg.substring(0, 100)}`);
+      this._addCloseButton(totalTime, queueProduct.name || ctx.name || goodsNo, false, errMsg, false, {
+        goodsNo,
+        allowRetry: true,
+      });
+    } catch (e) {
+      this.stopTimer();
+      const totalTime = ((Date.now() - this._startTime) / 1000).toFixed(1);
+      this._saveRetryContext(goodsNo, {
+        ...ctx,
+        lastError: e.message,
+        forceNormalRetry: true,
+      });
+      UI.updateProgressStep(1, 'error', `재등록 오류 (${totalTime}초): ${String(e.message).substring(0, 100)}`);
+      this._addCloseButton(totalTime, queueProduct.name || ctx.name || goodsNo, false, e.message, false, {
+        goodsNo,
+        allowRetry: true,
+      });
+    }
+  },
+
+  openRetryEditor(goodsNo) {
+    const ctx = this._getRetryContext(goodsNo);
+    if (!ctx) {
+      UI.showToast('수동 수정 가능한 임시 데이터가 없습니다', 'error');
+      return;
+    }
+
+    const invalidInputsHtml = this._formatInvalidInputsHtml(ctx.invalidInputs);
+    const groupFailureMsg = ctx.groupFailureInfo
+      ? this._extractRegisterErrorMessage(ctx.groupFailureInfo.error)
+      : '';
+    const forceNormalChecked = ctx.forceNormalRetry !== false ? 'checked' : '';
+
+    UI.showModal(`
+      <h3 style="margin:0 0 12px;">수동 수정 후 재시도</h3>
+      <div style="font-size:12px;color:#64748b;margin-bottom:12px;">이미 생성한 이미지/설명/업로드 결과를 그대로 재사용합니다. 다시 AI 생성하지 않습니다.</div>
+
+      <div style="margin-bottom:12px;">
+        <div style="font-size:12px;font-weight:700;color:#991b1b;margin-bottom:6px;">현재 오류</div>
+        <div style="padding:10px;border:1px solid #fecaca;background:#fff7f7;border-radius:8px;font-size:12px;color:#991b1b;">
+          ${this._escHtml(ctx.lastError || '등록 실패')}
+        </div>
+      </div>
+
+      ${groupFailureMsg ? `
+        <div style="margin-bottom:12px;">
+          <div style="font-size:12px;font-weight:700;color:#92400e;margin-bottom:6px;">그룹등록 실패 사유</div>
+          <div style="padding:10px;border:1px solid #fed7aa;background:#fff7ed;border-radius:8px;font-size:12px;color:#9a3412;">
+            ${this._escHtml(groupFailureMsg)}
+          </div>
+        </div>
+      ` : ''}
+
+      <div style="margin-bottom:12px;">
+        <div style="font-size:12px;font-weight:700;color:#334155;margin-bottom:6px;">invalidInputs</div>
+        ${invalidInputsHtml}
+      </div>
+
+      <label style="display:block;font-size:12px;font-weight:700;color:#334155;margin-bottom:6px;">카테고리 ID</label>
+      <input id="retry-category-id" type="text" value="${this._escHtml(ctx.categoryId || '')}" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;margin-bottom:12px;" />
+
+      <label style="display:block;font-size:12px;font-weight:700;color:#334155;margin-bottom:6px;">상세설명 HTML</label>
+      <textarea id="retry-detail-html" style="width:100%;height:220px;padding:10px;border:1px solid #cbd5e1;border-radius:8px;font-size:12px;line-height:1.5;margin-bottom:8px;">${this._escHtml(ctx.detailHtml || '')}</textarea>
+      <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+        <button type="button" class="btn btn-outline btn-sm" id="retry-sanitize-detail">금칙어 자동 치환</button>
+      </div>
+
+      <label style="display:block;font-size:12px;font-weight:700;color:#334155;margin-bottom:6px;">속성값 JSON</label>
+      <textarea id="retry-attributes-json" style="width:100%;height:160px;padding:10px;border:1px solid #cbd5e1;border-radius:8px;font-size:12px;line-height:1.5;">${this._escHtml(JSON.stringify(ctx.productAttributes || [], null, 2))}</textarea>
+
+      <label style="display:flex;align-items:center;gap:8px;margin:12px 0 16px;font-size:12px;color:#334155;cursor:pointer;">
+        <input id="retry-force-normal" type="checkbox" ${forceNormalChecked} />
+        일반상품 API로 바로 재시도
+      </label>
+
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button class="btn btn-outline btn-sm" onclick="UI.hideModal()">닫기</button>
+        <button class="btn btn-primary btn-sm" id="retry-submit-btn">수정 후 재시도</button>
+      </div>
+    `);
+
+    const sanitizeBtn = document.getElementById('retry-sanitize-detail');
+    const submitBtn = document.getElementById('retry-submit-btn');
+    const detailEl = document.getElementById('retry-detail-html');
+    const attrsEl = document.getElementById('retry-attributes-json');
+    const categoryEl = document.getElementById('retry-category-id');
+    const forceNormalEl = document.getElementById('retry-force-normal');
+
+    if (sanitizeBtn && detailEl) {
+      sanitizeBtn.onclick = () => {
+        detailEl.value = this._sanitizeDetailContent(detailEl.value);
+        UI.showToast('상세설명 금칙어 치환을 적용했습니다', 'success', 1800);
+      };
+    }
+
+    if (submitBtn) {
+      submitBtn.onclick = async () => {
+        let parsedAttributes = [];
+        try {
+          parsedAttributes = JSON.parse(attrsEl?.value || '[]');
+          if (!Array.isArray(parsedAttributes)) throw new Error('배열이 아닙니다');
+        } catch (e) {
+          UI.showToast('속성값 JSON 형식이 올바르지 않습니다: ' + e.message, 'error');
+          return;
+        }
+
+        await this._submitRetryPayload(goodsNo, {
+          categoryId: categoryEl?.value || ctx.categoryId,
+          detailHtml: detailEl?.value || ctx.detailHtml,
+          productAttributes: parsedAttributes,
+          forceNormal: !!forceNormalEl?.checked,
+        });
+      };
+    }
+  },
+
   async registerOne(goodsNo) {
     const queue = Storage.getQueue();
     const product = queue.find((p) => p.goodsNo === goodsNo);
@@ -756,6 +1055,7 @@ const Register = {
       }
 
       let regData;
+      let groupFailureInfo = null;
       if (useGroupRegister) {
         console.log('[등록] 그룹상품 등록 시도 (옵션', registrationOptions.length, '개)');
         try {
@@ -768,6 +1068,10 @@ const Register = {
         if (!regData.success) {
           const reason = typeof regData.error === 'string' ? regData.error
             : regData.error?.message || JSON.stringify(regData.error || '알 수 없음');
+          groupFailureInfo = {
+            error: regData.error,
+            invalidInputs: this._extractInvalidInputs(regData),
+          };
           console.warn('[등록] 그룹등록 실패 → 일반등록 전환:', reason);
           UI.updateProgressStep(2, 'active', '③ 그룹등록 실패 → 일반등록으로 전환...');
           regData = await API.registerProduct(regPayload);
@@ -835,16 +1139,43 @@ const Register = {
         this._addCloseButton(totalTime, cleanedBaseName, true, null, isGroup);
       } else {
         const errRaw = regData.error;
-        let errMsg;
-        if (typeof errRaw === 'string') errMsg = errRaw;
-        else if (errRaw?.message) errMsg = errRaw.message;
-        else errMsg = JSON.stringify(errRaw || '알 수 없는 오류');
+        const errMsg = this._extractRegisterErrorMessage(errRaw);
+        const invalidInputs = this._extractInvalidInputs(regData);
         console.error('[등록 실패 상세]', errRaw);
-        if (regData.invalidInputs) {
-          console.error('[invalidInputs]', JSON.stringify(regData.invalidInputs, null, 2));
+        if (invalidInputs.length > 0) {
+          console.error('[invalidInputs]', JSON.stringify(invalidInputs, null, 2));
         }
+        this._saveRetryContext(goodsNo, {
+          goodsNo,
+          name: registrationName,
+          cleanedBaseName,
+          categoryId,
+          categoryName,
+          sellingPrice: finalSellingPrice,
+          detailHtml,
+          uploadedImages,
+          options: registrationOptions,
+          stock: defaultStock,
+          brand: brandName || product.brand || '',
+          oliveyoungCategory: oyCategory,
+          sellerTags,
+          brandName: brandName || undefined,
+          manufacturerName: manufacturerName || undefined,
+          productAttributes: productAttributes.length > 0 ? productAttributes : [],
+          deliveryProfile,
+          optionThumbnailUploads: regPayload.optionThumbnailUploads || [],
+          sharedOptionalUploads: regPayload.sharedOptionalUploads || [],
+          useGroupRegister,
+          forceNormalRetry: !!groupFailureInfo || !useGroupRegister,
+          lastError: errMsg,
+          invalidInputs,
+          groupFailureInfo,
+        });
         UI.updateProgressStep(2, 'error', `등록 실패 (${totalTime}초): ${errMsg.substring(0, 100)}`);
-        this._addCloseButton(totalTime, product.name, false, errMsg);
+        this._addCloseButton(totalTime, product.name, false, errMsg, false, {
+          goodsNo,
+          allowRetry: true,
+        });
       }
     } catch (e) {
       this.stopTimer();
@@ -854,16 +1185,20 @@ const Register = {
     }
   },
 
-  _addCloseButton(totalTime, productName, success, errMsg, isGroup) {
+  _addCloseButton(totalTime, productName, success, errMsg, isGroup, actions = {}) {
     const stepsEl = document.getElementById('progress-steps');
     if (!stepsEl) return;
     const groupLabel = isGroup ? ' (그룹상품 — 옵션별 개별 페이지)' : '';
     const msg = success
       ? `<div style="text-align:center;margin:16px 0 8px;color:var(--success);font-weight:600;">등록 완료!${groupLabel} (${totalTime}초)</div>`
       : `<div style="text-align:center;margin:16px 0 8px;color:var(--danger);font-weight:600;">등록 실패 (${totalTime}초)</div>`;
+    const retryButton = !success && actions.allowRetry && actions.goodsNo
+      ? `<button class="btn btn-outline btn-sm" onclick="Register.openRetryEditor('${String(actions.goodsNo).replace(/'/g, "\\'")}')" style="min-width:150px;">수동 수정 후 재시도</button>`
+      : '';
     stepsEl.insertAdjacentHTML('beforeend', `
       ${msg}
-      <div style="text-align:center;margin-top:8px;">
+      <div style="text-align:center;margin-top:8px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
+        ${retryButton}
         <button class="btn btn-primary btn-sm" onclick="UI.hideProgress(); Register.render(); Products.render();" style="min-width:120px;">닫기</button>
       </div>
     `);
