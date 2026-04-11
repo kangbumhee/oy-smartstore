@@ -537,15 +537,63 @@ const Register = {
     if (saved) this._applyCategory(goodsNo, saved.id, saved.name);
   },
 
-  _extractRegisterErrorMessage(errRaw) {
-    if (typeof errRaw === 'string') return errRaw;
-    if (errRaw?.message) return errRaw.message;
-    if (errRaw?.raw) return errRaw.raw;
-    try {
-      return JSON.stringify(errRaw || '알 수 없는 오류');
-    } catch {
-      return '알 수 없는 오류';
+  /** 그룹/일반 등록 API가 error에 객체·배열·failReason 등을 넣을 수 있음 → 항상 문자열 */
+  _extractRegisterErrorMessage(errRaw, depth = 0) {
+    if (depth > 8) return '오류 내용을 요약할 수 없습니다';
+    if (errRaw == null) return '알 수 없는 오류';
+    if (typeof errRaw === 'string') {
+      const t = errRaw.trim();
+      return t || '알 수 없는 오류';
     }
+    if (typeof errRaw === 'number' || typeof errRaw === 'boolean') return String(errRaw);
+
+    if (Array.isArray(errRaw)) {
+      if (errRaw.length === 0) return '알 수 없는 오류';
+      const first = errRaw[0];
+      if (first && typeof first === 'object' && first.message != null) {
+        return this._extractRegisterErrorMessage(first.message, depth + 1);
+      }
+      return this._extractRegisterErrorMessage(first, depth + 1);
+    }
+
+    if (typeof errRaw === 'object') {
+      if (typeof errRaw.errorMessage === 'string' && errRaw.errorMessage.trim()) {
+        return errRaw.errorMessage.trim();
+      }
+      if (typeof errRaw.message === 'string' && errRaw.message.trim()) {
+        return errRaw.message.trim();
+      }
+      if (errRaw.message != null && typeof errRaw.message !== 'string') {
+        return this._extractRegisterErrorMessage(errRaw.message, depth + 1);
+      }
+      if (typeof errRaw.failReason === 'string' && errRaw.failReason.trim()) {
+        return errRaw.failReason.trim();
+      }
+      if (errRaw.failReason != null && typeof errRaw.failReason !== 'string') {
+        return this._extractRegisterErrorMessage(errRaw.failReason, depth + 1);
+      }
+      if (Array.isArray(errRaw.invalidInputs) && errRaw.invalidInputs.length > 0) {
+        return this._extractRegisterErrorMessage(errRaw.invalidInputs, depth + 1);
+      }
+      if (errRaw.progress != null) {
+        return this._extractRegisterErrorMessage(errRaw.progress, depth + 1);
+      }
+      if (typeof errRaw.raw === 'string') return errRaw.raw.trim() || '알 수 없는 오류';
+      if (errRaw.raw != null) return this._extractRegisterErrorMessage(errRaw.raw, depth + 1);
+      try {
+        const j = JSON.stringify(errRaw);
+        return j && j !== '{}' ? j : '알 수 없는 오류';
+      } catch {
+        return '알 수 없는 오류';
+      }
+    }
+
+    return String(errRaw);
+  },
+
+  _clipErr(text, maxLen) {
+    const s = this._extractRegisterErrorMessage(text);
+    return s.length > maxLen ? s.slice(0, maxLen) : s;
   },
 
   _extractInvalidInputs(regData) {
@@ -733,7 +781,7 @@ const Register = {
         groupFailureInfo: ctx.groupFailureInfo || groupFailureInfo,
       });
 
-      UI.updateProgressStep(1, 'error', `재등록 실패 (${totalTime}초): ${errMsg.substring(0, 100)}`);
+      UI.updateProgressStep(1, 'error', `재등록 실패 (${totalTime}초): ${this._clipErr(errMsg, 100)}`);
       this._addCloseButton(totalTime, queueProduct.name || ctx.name || goodsNo, false, errMsg, false, {
         goodsNo,
         allowRetry: true,
@@ -1018,7 +1066,7 @@ const Register = {
       ]);
 
       if (tokenResult.status === 'rejected' || !tokenResult.value) {
-        UI.updateProgressStep(0, 'error', '토큰 발급 실패: ' + (tokenResult.reason?.message || '').substring(0, 80));
+        UI.updateProgressStep(0, 'error', '토큰 발급 실패: ' + this._clipErr(tokenResult.reason?.message || tokenResult.reason, 80));
         this.stopTimer();
         return;
       }
@@ -1365,8 +1413,8 @@ const Register = {
           groupFailureInfo,
         });
         const failStep = groupFailureInfo
-          ? `③ 그룹등록 실패 (${totalTime}초): ${errMsg.substring(0, 90)} — 「수동 수정 후 재시도」버튼을 눌러 주세요`
-          : `등록 실패 (${totalTime}초): ${errMsg.substring(0, 100)}`;
+          ? `③ 그룹등록 실패 (${totalTime}초): ${this._clipErr(errMsg, 90)} — 「수동 수정 후 재시도」버튼을 눌러 주세요`
+          : `등록 실패 (${totalTime}초): ${this._clipErr(errMsg, 100)}`;
         UI.updateProgressStep(2, 'error', failStep);
         this._addCloseButton(totalTime, product.name, false, errMsg, false, {
           goodsNo,
@@ -1376,8 +1424,12 @@ const Register = {
     } catch (e) {
       this.stopTimer();
       const totalTime = ((Date.now() - this._startTime) / 1000).toFixed(1);
-      UI.updateProgressStep(0, 'error', '오류: ' + e.message.substring(0, 80));
-      this._addCloseButton(totalTime, product.name, false, e.message);
+      const outerErr = this._clipErr(e?.message != null ? e.message : e, 200);
+      UI.updateProgressStep(0, 'error', '오류: ' + this._clipErr(outerErr, 80));
+      this._addCloseButton(totalTime, product.name, false, outerErr, false, {
+        goodsNo: typeof goodsNo !== 'undefined' ? goodsNo : '',
+        allowRetry: !!goodsNo,
+      });
     }
   },
 
