@@ -40,12 +40,22 @@ const App = {
   },
 
   initModals() {
-    document.getElementById('modal-close').addEventListener('click', UI.hideModal);
+    document.getElementById('modal-close').addEventListener('click', () => {
+      if (Register?._categorySelectorState) Register._cancelCategorySelector();
+      else UI.hideModal();
+    });
     document.getElementById('modal-overlay').addEventListener('click', (e) => {
-      if (e.target.id === 'modal-overlay') UI.hideModal();
+      if (e.target.id === 'modal-overlay') {
+        if (Register?._categorySelectorState) Register._cancelCategorySelector();
+        else UI.hideModal();
+      }
     });
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') { UI.hideModal(); UI.hideProgress(); }
+      if (e.key === 'Escape') {
+        if (Register?._categorySelectorState) Register._cancelCategorySelector();
+        else UI.hideModal();
+        UI.hideProgress();
+      }
     });
   },
 

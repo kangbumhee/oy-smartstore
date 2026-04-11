@@ -3,6 +3,7 @@ const Register = {
   _timer: null,
   _startTime: 0,
   _retryContexts: {},
+  _categorySelectorState: null,
 
   render() {
     const queue = Storage.getQueue();
@@ -296,27 +297,82 @@ const Register = {
     });
   },
 
-  async openCategorySelector(goodsNo) {
+  _clearCategorySelectorState(selection = null) {
+    const state = this._categorySelectorState;
+    this._categorySelectorState = null;
+    if (state?.resolve) state.resolve(selection);
+  },
+
+  _getCategorySearchKeywords(product) {
+    const oyCategory = `${product.category || ''} ${product.subCategory || ''}`.trim();
+    const raw = [
+      product.subCategory || '',
+      product.category || '',
+      oyCategory,
+      product.brand || '',
+      ...(String(product.name || '').split(/[\s/,+()[\]-]+/).filter(Boolean).slice(0, 8)),
+    ];
+
+    const keywords = [];
+    for (const token of raw) {
+      const normalized = String(token).trim();
+      if (!normalized || normalized.length < 2) continue;
+      if (!keywords.includes(normalized)) keywords.push(normalized);
+      if (keywords.length >= 6) break;
+    }
+    return keywords;
+  },
+
+  _renderCategoryResultCards(results, goodsNo, style = 'outline') {
+    if (!Array.isArray(results) || results.length === 0) return '';
+    return results.map((r) => `
+      <div style="padding:9px 12px;border:1px solid #e2e8f0;border-radius:10px;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between;gap:12px;background:#fff;">
+        <div style="min-width:0;">
+          <div style="font-size:13px;color:#334155;word-break:break-word;">${this._escHtml(r.name)}</div>
+          <div style="font-size:11px;color:#94a3b8;">${this._escHtml(r.id)}</div>
+        </div>
+        <button class="btn btn-sm btn-${style}" onclick="Register._applyCategory('${goodsNo}', '${String(r.id).replace(/'/g, "\\'")}', '${this._escHtml(r.name).replace(/'/g, "\\'")}')">선택</button>
+      </div>
+    `).join('');
+  },
+
+  async openCategorySelector(goodsNo, options = {}) {
     const queue = Storage.getQueue();
     const product = queue.find(p => p.goodsNo === goodsNo);
-    if (!product) return;
+    if (!product) return null;
+    const { requireSelection = false, title = '네이버 카테고리 선택' } = options;
     const oyCategory = `${product.category || ''} ${product.subCategory || ''}`.trim();
     const saved = product._naverCategory || Storage.getSavedCategory(oyCategory);
+    const autoFallback = saved || null;
 
-    let autoCategory = null;
-    const tokenReady = localStorage.getItem('naver_token');
+    const selectionPromise = new Promise((resolve) => {
+      this._categorySelectorState = {
+        goodsNo,
+        oyCategory,
+        requireSelection,
+        resolve,
+      };
+    });
 
     UI.showModal(`
-      <h3 style="margin:0 0 12px;">네이버 카테고리 선택</h3>
+      <h3 style="margin:0 0 12px;">${this._escHtml(title)}</h3>
       <p style="font-size:13px;color:#666;margin:0 0 4px;">
         <strong>${this._escHtml(product.name)}</strong>
       </p>
-      <p style="font-size:12px;color:#94a3b8;margin:0 0 16px;">올리브영: ${this._escHtml(oyCategory)}</p>
+      <p style="font-size:12px;color:#94a3b8;margin:0 0 8px;">올리브영: ${this._escHtml(oyCategory)}</p>
+      ${requireSelection ? '<p style="font-size:12px;color:#6366f1;margin:0 0 16px;">등록 전에 추천 카테고리 중 하나를 직접 선택할 수 있습니다.</p>' : ''}
 
       <div id="cat-auto-section" style="margin-bottom:16px;">
-        <div style="font-size:12px;font-weight:600;color:#6366f1;margin-bottom:6px;">🤖 자동 감지</div>
+        <div style="font-size:12px;font-weight:600;color:#6366f1;margin-bottom:6px;">🤖 자동 추천</div>
         <div id="cat-auto-result" style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;color:#64748b;">
           감지 중...
+        </div>
+      </div>
+
+      <div style="margin-bottom:16px;">
+        <div style="font-size:12px;font-weight:600;color:#0f766e;margin-bottom:6px;">✨ 추천 카테고리</div>
+        <div id="cat-recommend-results" style="max-height:220px;overflow-y:auto;padding:8px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;color:#64748b;">
+          추천 목록을 불러오는 중...
         </div>
       </div>
 
@@ -346,36 +402,75 @@ const Register = {
       </div>
 
       <div style="display:flex;gap:8px;justify-content:flex-end;">
-        <button class="btn btn-outline btn-sm" onclick="UI.hideModal()">취소</button>
+        ${autoFallback ? `<button class="btn btn-primary btn-sm" onclick="Register._applyCategory('${goodsNo}', '${String(autoFallback.id).replace(/'/g, "\\'")}', '${this._escHtml(autoFallback.name).replace(/'/g, "\\'")}')">현재 추천으로 진행</button>` : ''}
+        <button class="btn btn-outline btn-sm" onclick="Register._cancelCategorySelector()">${requireSelection ? '등록 취소' : '취소'}</button>
       </div>
     `);
 
     const searchInput = document.getElementById('cat-search-input');
-    searchInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') Register._searchCategories();
-    });
+    if (searchInput) {
+      searchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') Register._searchCategories();
+      });
+    }
 
-    this._catSelectorGoodsNo = goodsNo;
-    this._catSelectorOyCategory = oyCategory;
+    try {
+      await API.obtainNaverToken(15);
+    } catch {
+      const autoEl = document.getElementById('cat-auto-result');
+      if (autoEl) autoEl.textContent = '네이버 토큰 준비 실패 — 직접 검색으로 선택해주세요';
+    }
 
-    if (tokenReady) {
+    let autoCategory = null;
+    try {
+      const cat = await API.getBestCategory(oyCategory, product.name);
+      autoCategory = cat?.id ? { id: cat.id, name: cat.name } : null;
+      const autoEl = document.getElementById('cat-auto-result');
+      if (autoEl) {
+        autoEl.innerHTML = autoCategory
+          ? this._renderCategoryResultCards([autoCategory], goodsNo, 'primary')
+          : '자동 감지 실패 — 직접 검색해주세요';
+      }
+    } catch {
+      const autoEl = document.getElementById('cat-auto-result');
+      if (autoEl) autoEl.textContent = '자동 감지 실패 — 직접 검색해주세요';
+    }
+
+    const recommendEl = document.getElementById('cat-recommend-results');
+    if (recommendEl) {
       try {
-        const cat = await API.getBestCategory(oyCategory, product.name);
-        autoCategory = { id: cat.id, name: cat.name };
-        const autoEl = document.getElementById('cat-auto-result');
-        if (autoEl) {
-          autoEl.innerHTML = `
-            <div style="display:flex;align-items:center;justify-content:space-between;">
-              <span>${this._escHtml(cat.name)} <span style="color:#94a3b8;">(${cat.id})</span></span>
-              <button class="btn btn-sm btn-primary" onclick="Register._applyCategory('${goodsNo}', '${cat.id}', '${this._escHtml(cat.name).replace(/'/g, "\\'")}')">선택</button>
-            </div>`;
+        const keywords = this._getCategorySearchKeywords(product);
+        const seen = new Set();
+        const recommended = [];
+        for (const keyword of keywords) {
+          const data = await API.searchCategories(keyword);
+          for (const row of (data.results || [])) {
+            if (!row?.id || seen.has(String(row.id))) continue;
+            seen.add(String(row.id));
+            recommended.push({ id: row.id, name: row.name });
+            if (recommended.length >= 8) break;
+          }
+          if (recommended.length >= 8) break;
         }
-        this._autoCategory = autoCategory;
-      } catch {
-        const autoEl = document.getElementById('cat-auto-result');
-        if (autoEl) autoEl.textContent = '자동 감지 실패 — 직접 검색해주세요';
+        const merged = [];
+        if (autoCategory) merged.push(autoCategory);
+        for (const row of recommended) {
+          if (!merged.some((m) => String(m.id) === String(row.id))) merged.push(row);
+        }
+        recommendEl.innerHTML = merged.length > 0
+          ? this._renderCategoryResultCards(merged, goodsNo)
+          : '<div style="padding:6px 4px;color:#94a3b8;">추천 목록이 없습니다. 직접 검색을 사용해주세요.</div>';
+      } catch (e) {
+        recommendEl.innerHTML = `<div style="padding:6px 4px;color:#dc2626;">추천 목록 조회 실패: ${this._escHtml(e.message)}</div>`;
       }
     }
+
+    return selectionPromise;
+  },
+
+  _cancelCategorySelector() {
+    UI.hideModal();
+    this._clearCategorySelectorState(null);
   },
 
   async _searchCategories() {
@@ -400,7 +495,7 @@ const Register = {
             <div style="font-size:13px;color:#334155;">${this._escHtml(r.name)}</div>
             <div style="font-size:11px;color:#94a3b8;">${r.id}</div>
           </div>
-          <button class="btn btn-sm btn-outline" onclick="Register._applyCategory('${this._catSelectorGoodsNo}', '${r.id}', '${this._escHtml(r.name).replace(/'/g, "\\'")}')">선택</button>
+          <button class="btn btn-sm btn-outline" onclick="Register._applyCategory('${this._categorySelectorState?.goodsNo || ''}', '${r.id}', '${this._escHtml(r.name).replace(/'/g, "\\'")}')">선택</button>
         </div>
       `).join('');
     } catch (e) {
@@ -410,7 +505,7 @@ const Register = {
 
   _applyCategory(goodsNo, catId, catName) {
     const saveMapping = document.getElementById('cat-save-mapping')?.checked;
-    const oyCategory = this._catSelectorOyCategory;
+    const oyCategory = this._categorySelectorState?.oyCategory;
 
     Storage.updateQueueItem(goodsNo, { _naverCategory: { id: catId, name: catName } });
 
@@ -422,11 +517,12 @@ const Register = {
     }
 
     UI.hideModal();
+    this._clearCategorySelectorState({ id: catId, name: catName });
     this.render();
   },
 
   _applyCategoryFromSaved(goodsNo) {
-    const oyCategory = this._catSelectorOyCategory;
+    const oyCategory = this._categorySelectorState?.oyCategory;
     const saved = Storage.getSavedCategory(oyCategory);
     if (saved) this._applyCategory(goodsNo, saved.id, saved.name);
   },
@@ -778,7 +874,20 @@ const Register = {
     const settings = Storage.getSettings();
     const oyCategory = `${product.category || ''} ${product.subCategory || ''}`.trim();
 
-    const manualCat = product._naverCategory || Storage.getSavedCategory(oyCategory);
+    let manualCat = product._naverCategory || Storage.getSavedCategory(oyCategory);
+    if (!product._naverCategory) {
+      const selectedCategory = await this.openCategorySelector(goodsNo, {
+        requireSelection: true,
+        title: '등록 전 카테고리 선택',
+      });
+      if (!selectedCategory?.id) {
+        UI.showToast('카테고리 선택이 취소되어 등록을 중단했습니다', 'info');
+        return;
+      }
+      manualCat = selectedCategory;
+      product._naverCategory = selectedCategory;
+      Storage.updateQueueItem(goodsNo, { _naverCategory: selectedCategory });
+    }
     const skipCategoryApi = !!manualCat;
 
     const steps = [

@@ -1,5 +1,5 @@
 const { getAuthHeaders, getAuthHeadersFromToken, resolveCredentials, resolveToken, proxyFetch, NAVER_API_BASE } = require('../../lib/naver-auth');
-const { OLIVEYOUNG_TO_NAVER, BLOCKED_COSMETIC_IDS, SAFE_COSMETIC } = require('../../lib/category-data');
+const { OLIVEYOUNG_TO_NAVER, BLOCKED_COSMETIC_IDS, SAFE_COSMETIC, getNaverCategory } = require('../../lib/category-data');
 
 let cachedCategories = null;
 let cacheTime = 0;
@@ -201,6 +201,10 @@ module.exports = async function handler(req, res) {
     }
 
     if (mode === 'best-match') {
+      const mapped = getNaverCategory(String(oyCategory || '').trim());
+      if (mapped) {
+        return res.status(200).json({ success: true, ...mapped, method: 'rule_based' });
+      }
       const match = await getBestMatch(categories, oyCategory, productName);
       return res.status(200).json({ success: true, ...match, method: 'api_search' });
     }

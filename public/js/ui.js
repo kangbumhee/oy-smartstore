@@ -91,7 +91,6 @@ const UI = {
                 <span style="color:#94a3b8;font-size:11px;">카테고리:</span>
                 <span style="color:${catColor};font-weight:500;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${this._escHtml(catLabel)}">${this._escHtml(catLabel)}</span>
                 <span style="font-size:10px;padding:1px 5px;border-radius:8px;background:${catColor}15;color:${catColor};border:1px solid ${catColor}40;">${catSource}</span>
-                <button type="button" style="font-size:11px;padding:1px 5px;cursor:pointer;border:1px solid #e2e8f0;border-radius:5px;background:#fff;color:#6366f1;" onclick="Register.openCategorySelector('${product.goodsNo}')">변경</button>
               </div>
               <div style="display:flex;align-items:center;gap:4px;">
                 <span style="color:#94a3b8;font-size:11px;">브랜드:</span>
@@ -150,6 +149,7 @@ const UI = {
           </div>
         ` : ''}
         <div class="queue-item-actions">
+          <button class="btn btn-primary btn-sm" onclick="Register.openCategorySelector('${product.goodsNo}', { title: '카테고리 선택' })">카테고리 선택</button>
           <button class="btn btn-outline btn-sm" onclick="Register.remove('${product.goodsNo}')">제거</button>
           <button class="btn btn-success btn-sm" onclick="Register.registerOne('${product.goodsNo}')">스마트스토어 등록</button>
         </div>
