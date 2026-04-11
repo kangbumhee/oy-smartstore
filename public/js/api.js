@@ -108,6 +108,7 @@ const API = {
 
   // Naver (uses cached token)
   async getNaverAuth() { return this.post('/api/naver/auth', {}); },
+  async getNaverDeliverySettings() { return this.get('/api/naver/delivery-settings', true); },
   async registerProduct(data) { return this.post('/api/naver/register', data, true); },
   async registerGroupProduct(data) { return this.post('/api/naver/register-group', data, true); },
   async uploadImages(imageUrls) { return this.post('/api/naver/upload-image', { imageUrls }, true); },

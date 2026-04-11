@@ -6,6 +6,7 @@ const Storage = {
     SETTINGS: 'oy_settings',
     CREDENTIALS: 'oy_credentials',
     CATEGORY_MAP: 'oy_category_mappings',
+    DELIVERY_PROFILES: 'oy_delivery_profiles',
   },
 
   get(key, fallback = null) {
@@ -108,5 +109,27 @@ const Storage = {
     const map = this.getCategoryMap();
     delete map[oyCategory];
     this.set(this.KEYS.CATEGORY_MAP, map);
+  },
+
+  getDeliveryProfiles() {
+    return this.get(this.KEYS.DELIVERY_PROFILES, {});
+  },
+
+  getDeliveryProfile(shopKey) {
+    const profiles = this.getDeliveryProfiles();
+    return profiles[shopKey] || null;
+  },
+
+  setDeliveryProfile(shopKey, profile) {
+    if (!shopKey) return;
+    const profiles = this.getDeliveryProfiles();
+    profiles[shopKey] = { ...profile, savedAt: Date.now() };
+    this.set(this.KEYS.DELIVERY_PROFILES, profiles);
+  },
+
+  removeDeliveryProfile(shopKey) {
+    const profiles = this.getDeliveryProfiles();
+    delete profiles[shopKey];
+    this.set(this.KEYS.DELIVERY_PROFILES, profiles);
   },
 };

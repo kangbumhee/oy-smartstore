@@ -125,6 +125,29 @@ const Register = {
     return name || rawName;
   },
 
+  _getCurrentShopKey() {
+    const creds = Storage.getCredentials();
+    return String(creds.naverClientId || 'default-shop').trim() || 'default-shop';
+  },
+
+  async resolveDeliveryProfile(forceRefresh = false) {
+    const shopKey = this._getCurrentShopKey();
+    if (!forceRefresh) {
+      const cached = Storage.getDeliveryProfile(shopKey);
+      if (cached?.shippingAddressId && cached?.returnAddressId) {
+        return cached;
+      }
+    }
+
+    const data = await API.getNaverDeliverySettings();
+    if (!data.success || !data.profile?.shippingAddressId || !data.profile?.returnAddressId) {
+      throw new Error(data.error || '스마트스토어 배송지/반품지 조회에 실패했습니다.');
+    }
+
+    Storage.setDeliveryProfile(shopKey, data.profile);
+    return data.profile;
+  },
+
   showStockPopup(opts, product) {
     return new Promise((resolve) => {
       const isSoldOutFlag = (o) => o.soldOut === true || o.soldOutFlag === 'Y';
@@ -376,6 +399,14 @@ const Register = {
     const marginRate = product.marginRate || 15;
     const calc = Margin.calculate(product.price, marginRate);
     const cleanedBaseName = this.cleanProductName(product.name);
+    let deliveryProfile;
+
+    try {
+      deliveryProfile = await this.resolveDeliveryProfile();
+    } catch (e) {
+      UI.showToast(e.message, 'error');
+      return;
+    }
 
     let allOpts = product.options || [];
     if (allOpts.length === 0 && typeof OptionModal !== 'undefined') {
@@ -715,6 +746,7 @@ const Register = {
         brandName: brandName || undefined,
         manufacturerName: manufacturerName || undefined,
         productAttributes: productAttributes.length > 0 ? productAttributes : undefined,
+        deliveryProfile,
       };
 
       if (useGroupRegister && opts.length > 1 && thumbUploads.length > 0) {

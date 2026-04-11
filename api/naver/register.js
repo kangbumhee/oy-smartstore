@@ -1,5 +1,6 @@
 const { getAccessToken, getAuthHeadersFromToken, resolveCredentials, resolveToken, proxyFetch, NAVER_API_BASE } = require('../../lib/naver-auth');
-const { getDetailAttribute, DELIVERY_INFO } = require('../../lib/delivery-template');
+const { getDetailAttribute } = require('../../lib/delivery-template');
+const { resolveDeliveryProfile, buildDeliveryInfo, hasDeliveryProfileError } = require('../../lib/naver-delivery');
 
 const PRODUCT_URL = `${NAVER_API_BASE}/v2/products`;
 
@@ -83,7 +84,7 @@ module.exports = async function handler(req, res) {
   try { body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body; } catch { return res.status(400).json({ error: 'Invalid JSON body' }); }
 
   const { name, sellingPrice, categoryId, detailHtml, uploadedImages = [], options = [], stock = 999, brand = '', oliveyoungCategory = '', sellerTags = [],
-    brandId, brandName, manufacturerId, manufacturerName, productAttributes = [] } = body;
+    brandId, brandName, manufacturerId, manufacturerName, productAttributes = [], deliveryProfile = null } = body;
   if (!name || !sellingPrice || !categoryId || !detailHtml) {
     return res.status(400).json({ error: 'name, sellingPrice, categoryId, detailHtml required' });
   }
@@ -101,6 +102,26 @@ module.exports = async function handler(req, res) {
     const detailAttr = getDetailAttribute(oliveyoungCategory, cleanedName, brand);
     const optionInfo = buildOptions(options);
     const hasOptions = optionInfo && optionInfo.optionCombinations && optionInfo.optionCombinations.length > 0;
+    let effectiveDeliveryProfile = deliveryProfile;
+
+    if (!effectiveDeliveryProfile?.shippingAddressId || !effectiveDeliveryProfile?.returnAddressId) {
+      const resolvedDelivery = await resolveDeliveryProfile(headers);
+      if (!resolvedDelivery.success) {
+        return res.status(400).json({
+          success: false,
+          error: resolvedDelivery.error,
+          deliveryProfile: resolvedDelivery.profile,
+        });
+      }
+      effectiveDeliveryProfile = resolvedDelivery.profile;
+    }
+
+    let deliveryInfo;
+    try {
+      deliveryInfo = buildDeliveryInfo(effectiveDeliveryProfile);
+    } catch (e) {
+      return res.status(400).json({ success: false, error: e.message, deliveryProfile: effectiveDeliveryProfile });
+    }
 
     if (hasOptions) {
       detailAttr.optionInfo = optionInfo;
@@ -162,7 +183,7 @@ module.exports = async function handler(req, res) {
         stockQuantity: hasOptions ? 0 : stock,
         detailContent: detailHtml,
         images: imageBlock,
-        deliveryInfo: DELIVERY_INFO,
+        deliveryInfo,
         detailAttribute: detailAttr,
       },
       smartstoreChannelProduct: {
@@ -173,8 +194,15 @@ module.exports = async function handler(req, res) {
 
     console.log('[register] name:', cleanedName, '| options:', options.length,
       '| hasOptions:', hasOptions, '| stockQuantity:', hasOptions ? 0 : stock,
-      hasOptions ? `combinations: ${optionInfo.optionCombinations.length}` : '');
+      hasOptions ? `combinations: ${optionInfo.optionCombinations.length}` : '',
+      '| deliveryProfile:', JSON.stringify({
+        shippingAddressId: effectiveDeliveryProfile.shippingAddressId,
+        returnAddressId: effectiveDeliveryProfile.returnAddressId,
+        outboundLocationId: effectiveDeliveryProfile.outboundLocationId || null,
+        deliveryBundleGroupUsable: true,
+      }));
 
+    let deliveryRetried = false;
     for (let attempt = 0; attempt < 4; attempt++) {
       let registerRes = await proxyFetch(PRODUCT_URL, { method: 'POST', headers, body: JSON.stringify(payload) });
       let text = await registerRes.text();
@@ -187,6 +215,18 @@ module.exports = async function handler(req, res) {
         (i.type || '').includes('sellerTags') || (i.type || '').includes('recommendTags') ||
         (i.name || '').includes('sellerTags') || (i.message || '').includes('태그')
       );
+      const deliveryError = hasDeliveryProfileError(data);
+
+      if (deliveryError && !deliveryRetried) {
+        const refreshedDelivery = await resolveDeliveryProfile(headers);
+        if (refreshedDelivery.success) {
+          effectiveDeliveryProfile = refreshedDelivery.profile;
+          payload.originProduct.deliveryInfo = buildDeliveryInfo(effectiveDeliveryProfile);
+          deliveryRetried = true;
+          console.log('[register] 배송 프로필 재조회 후 재시도:', JSON.stringify(effectiveDeliveryProfile));
+          continue;
+        }
+      }
 
       if (!tagError || !detailAttr.seoInfo?.sellerTags?.length) {
         console.log('[register] FAILED:', registerRes.status, text.substring(0, 500));

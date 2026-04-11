@@ -5,7 +5,8 @@
  * 공식 가이드: https://github.com/commerce-api-naver/commerce-api/wiki/커머스API-그룹상품-연동-가이드
  */
 const { getAccessToken, getAuthHeadersFromToken, resolveCredentials, resolveToken, proxyFetch, NAVER_API_BASE } = require('../../lib/naver-auth');
-const { getProductNotice, DELIVERY_INFO, AFTER_SERVICE_INFO, ORIGIN_AREA_INFO } = require('../../lib/delivery-template');
+const { getProductNotice, AFTER_SERVICE_INFO, ORIGIN_AREA_INFO } = require('../../lib/delivery-template');
+const { resolveDeliveryProfile, buildDeliveryInfo, hasDeliveryProfileError } = require('../../lib/naver-delivery');
 
 const GROUP_PRODUCTS_URL = `${NAVER_API_BASE}/v2/standard-group-products`;
 const GUIDE_URL = `${NAVER_API_BASE}/v2/standard-purchase-option-guides`;
@@ -193,6 +194,7 @@ module.exports = async function handler(req, res) {
     sellerTags = [],
     brandId, brandName: reqBrandName, manufacturerId, manufacturerName: reqManufacturerName,
     productAttributes = [],
+    deliveryProfile = null,
   } = body;
 
   const effectiveBrand = String(brand || reqBrandName || '').trim();
@@ -220,6 +222,26 @@ module.exports = async function handler(req, res) {
     }
     const headers = getAuthHeadersFromToken(token);
     const cleanedName = cleanProductName(name).substring(0, 100);
+    let effectiveDeliveryProfile = deliveryProfile;
+
+    if (!effectiveDeliveryProfile?.shippingAddressId || !effectiveDeliveryProfile?.returnAddressId) {
+      const resolvedDelivery = await resolveDeliveryProfile(headers);
+      if (!resolvedDelivery.success) {
+        return res.status(400).json({
+          success: false,
+          error: resolvedDelivery.error,
+          deliveryProfile: resolvedDelivery.profile,
+        });
+      }
+      effectiveDeliveryProfile = resolvedDelivery.profile;
+    }
+
+    let deliveryInfo;
+    try {
+      deliveryInfo = buildDeliveryInfo(effectiveDeliveryProfile);
+    } catch (e) {
+      return res.status(400).json({ success: false, error: e.message, deliveryProfile: effectiveDeliveryProfile });
+    }
 
     const guide = await fetchOptionGuide(headers, categoryId);
     if (!guide.supported) {
@@ -281,7 +303,7 @@ module.exports = async function handler(req, res) {
         salePrice: Math.round(finalPrice),
         stockQuantity: Math.max(0, optStock),
         images: imagesPayload,
-        deliveryInfo: DELIVERY_INFO,
+        deliveryInfo: { ...deliveryInfo },
         originAreaInfo: ORIGIN_AREA_INFO,
         standardPurchaseOptions: buildStandardPurchaseOptions(optName, stdOptions),
         smartstoreChannelProduct: {
@@ -346,9 +368,16 @@ module.exports = async function handler(req, res) {
       '| name:', cleanedName,
       '| options:', allOpts.length,
       '| guideId:', guideId,
-      '| stdOptions:', stdOptions.map((o) => `${o.optionName}(${o.optionId})`).join(','));
+      '| stdOptions:', stdOptions.map((o) => `${o.optionName}(${o.optionId})`).join(','),
+      '| deliveryProfile:', JSON.stringify({
+        shippingAddressId: effectiveDeliveryProfile.shippingAddressId,
+        returnAddressId: effectiveDeliveryProfile.returnAddressId,
+        outboundLocationId: effectiveDeliveryProfile.outboundLocationId || null,
+        deliveryBundleGroupUsable: true,
+      }));
 
     let r, text, data;
+    let deliveryRetried = false;
     for (let attempt = 0; attempt < 4; attempt++) {
       r = await proxyFetch(GROUP_PRODUCTS_URL, { method: 'POST', headers, body: JSON.stringify(payload) });
       text = await r.text();
@@ -360,6 +389,23 @@ module.exports = async function handler(req, res) {
         (i.type || '').includes('sellerTags') || (i.type || '').includes('recommendTags') ||
         (i.name || '').includes('sellerTags') || (i.message || '').includes('태그')
       );
+      const deliveryError = hasDeliveryProfileError(data);
+
+      if (deliveryError && !deliveryRetried) {
+        const refreshedDelivery = await resolveDeliveryProfile(headers);
+        if (refreshedDelivery.success) {
+          effectiveDeliveryProfile = refreshedDelivery.profile;
+          const refreshedInfo = buildDeliveryInfo(effectiveDeliveryProfile);
+          payload.groupProduct.specificProducts = payload.groupProduct.specificProducts.map((item) => ({
+            ...item,
+            deliveryInfo: { ...refreshedInfo },
+          }));
+          deliveryRetried = true;
+          console.log('[group-register] 배송 프로필 재조회 후 재시도:', JSON.stringify(effectiveDeliveryProfile));
+          continue;
+        }
+      }
+
       if (!tagError || !payload.groupProduct.seoInfo?.sellerTags?.length) break;
 
       const badMatch = (tagError.message || '').match(/[\(（]([^)）]+)[\)）]/);
