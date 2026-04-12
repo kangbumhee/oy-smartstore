@@ -162,11 +162,10 @@ const API = {
    * AI 상품 이미지 — EccoAPI는 호출당 과금됨.
    * Vercel이 응답 전 연결을 끊으면(ERR_CONNECTION_CLOSED) 재시도 시 매번 다시 과금되므로 재시도하지 않는다.
    */
-  async generateProductImages(productInfo) {
+  async _generateProductImageSingle(productInfo, timeoutMs = 55000) {
     const h = this._credHeaders();
     h['Content-Type'] = 'application/json';
     const body = JSON.stringify(productInfo);
-    const timeoutMs = 130000;
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), timeoutMs);
     try {
@@ -193,6 +192,150 @@ const API = {
         noRetry: true,
       };
     }
+  },
+
+  async generateProductImages(productInfo) {
+    const {
+      onProgress,
+      count = 1,
+      thumbnail,
+      thumbnailList: rawThumbnailList,
+      thumbnailCount: rawThumbnailCount,
+      thumbnailOptions: rawThumbnailOptions,
+      ...baseInfo
+    } = productInfo || {};
+
+    const totalCount = Math.min(Math.max(1, parseInt(count, 10) || 1), 20);
+    const thumbnailList = Array.isArray(rawThumbnailList)
+      ? rawThumbnailList.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+    const thumbnailOptions = Array.isArray(rawThumbnailOptions)
+      ? rawThumbnailOptions.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+    const requestedThumbCount = Math.max(0, parseInt(rawThumbnailCount, 10) || 0);
+    const thumbnailJobs = thumbnailList.length > 0
+      ? Math.min(totalCount, requestedThumbCount > 0 ? requestedThumbCount : thumbnailList.length)
+      : 0;
+    const sharedJobs = Math.max(0, totalCount - thumbnailJobs);
+
+    const jobs = [];
+    for (let i = 0; i < thumbnailJobs; i++) {
+      jobs.push({
+        kind: 'thumbnail',
+        payload: {
+          ...baseInfo,
+          count: 1,
+          thumbnail: thumbnailList[i] || thumbnail || '',
+          thumbnailList: undefined,
+          thumbnailCount: 1,
+          thumbnailOptions: thumbnailOptions[i] ? [thumbnailOptions[i]] : undefined,
+        },
+      });
+    }
+    for (let i = 0; i < sharedJobs; i++) {
+      jobs.push({
+        kind: 'shared',
+        payload: {
+          ...baseInfo,
+          count: 1,
+          thumbnail: thumbnail || thumbnailList[0] || '',
+          thumbnailList: undefined,
+          thumbnailCount: undefined,
+          thumbnailOptions: undefined,
+        },
+      });
+    }
+    if (jobs.length === 0) {
+      jobs.push({
+        kind: 'shared',
+        payload: {
+          ...baseInfo,
+          count: 1,
+          thumbnail: thumbnail || thumbnailList[0] || '',
+        },
+      });
+    }
+
+    const images = [];
+    const errors = [];
+    let noRetry = false;
+
+    for (let i = 0; i < jobs.length; i++) {
+      const job = jobs[i];
+      try {
+        if (typeof onProgress === 'function') {
+          onProgress({
+            phase: 'start',
+            index: i + 1,
+            total: jobs.length,
+            kind: job.kind,
+            message: `${job.kind === 'thumbnail' ? '썸네일' : '공유'} 이미지 ${i + 1}/${jobs.length} 생성 시작`,
+          });
+        }
+        const data = await this._generateProductImageSingle(job.payload, 55000);
+        if (data.success && Array.isArray(data.images) && data.images.length > 0) {
+          images.push(...data.images);
+          if (typeof onProgress === 'function') {
+            onProgress({
+              phase: 'done',
+              index: i + 1,
+              total: jobs.length,
+              kind: job.kind,
+              message: `${job.kind === 'thumbnail' ? '썸네일' : '공유'} 이미지 ${i + 1}/${jobs.length} 완료`,
+            });
+          }
+        } else {
+          const errMsg = data.error || '이미지 생성 실패';
+          errors.push(`job ${i + 1}: ${errMsg}`);
+          noRetry = noRetry || !!data.noRetry;
+          if (typeof onProgress === 'function') {
+            onProgress({
+              phase: 'error',
+              index: i + 1,
+              total: jobs.length,
+              kind: job.kind,
+              message: `${job.kind === 'thumbnail' ? '썸네일' : '공유'} 이미지 ${i + 1}/${jobs.length} 실패: ${errMsg}`,
+            });
+          }
+        }
+      } catch (e) {
+        const errMsg = String(e?.message || e);
+        errors.push(`job ${i + 1}: ${errMsg}`);
+        noRetry = true;
+        if (typeof onProgress === 'function') {
+          onProgress({
+            phase: 'error',
+            index: i + 1,
+            total: jobs.length,
+            kind: job.kind,
+            message: `${job.kind === 'thumbnail' ? '썸네일' : '공유'} 이미지 ${i + 1}/${jobs.length} 실패: ${errMsg}`,
+          });
+        }
+      }
+    }
+
+    if (images.length === 0) {
+      return {
+        success: false,
+        error: errors[0] || '이미지 생성 실패',
+        errors,
+        requestedJobs: jobs.length,
+        ranJobs: jobs.length,
+        truncated: true,
+        noRetry,
+      };
+    }
+
+    return {
+      success: true,
+      images,
+      count: images.length,
+      errors,
+      requestedJobs: jobs.length,
+      ranJobs: jobs.length,
+      truncated: images.length < jobs.length,
+      noRetry,
+    };
   },
 
   // Tags

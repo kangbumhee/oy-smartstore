@@ -1606,6 +1606,10 @@ const Register = {
           thumbnailOptions: opts.length > 1
             ? opts.slice(0, totalThumbnails).map((o) => (o.name || o.optionName || '').trim()).filter(Boolean)
             : undefined,
+          onProgress: (event) => {
+            const line = event?.message || `이미지 작업 ${event?.index || '?'} / ${event?.total || '?'}`;
+            this._logProgress('[등록] ' + line, null, event?.phase === 'error' ? 'warn' : 'info');
+          },
         }),
         API.generateDescription({
           name: cleanedBaseName,
