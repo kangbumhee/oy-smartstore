@@ -110,6 +110,20 @@ const Register = {
     }
   },
 
+  /** AI 스튜디오 참조용 — 고해상도(2000px)는 base64로 Ecco/게이트웨이 한도 초과·타임아웃 유발 */
+  _toStudioRefImage(url) {
+    if (!url) return '';
+    try {
+      const parsed = new URL(String(url), window.location.origin);
+      parsed.searchParams.set('RS', '900x0');
+      parsed.searchParams.set('QT', '82');
+      return parsed.toString();
+    } catch {
+      const separator = String(url).includes('?') ? '&' : '?';
+      return `${url}${separator}RS=900x0&QT=82`;
+    }
+  },
+
   /** 캔버스+toDataURL 시 crossOrigin으로 막히는 호스트(R2 등) */
   _imageUrlNeedsCanvasProxy(url) {
     const s = String(url || '');
@@ -171,6 +185,40 @@ const Register = {
       };
       img.onerror = () => resolve(imageUrl);
       img.src = loadUrl;
+    });
+  },
+
+  /** data URL이 크면 Vercel/네이버 업로드 한도에 걸림 → 긴 변 1600px JPEG로 축소 */
+  async _shrinkDataUrlForUpload(imageUrl, maxEdge = 1600, quality = 0.82) {
+    const s = String(imageUrl || '');
+    if (!s.startsWith('data:image/')) return imageUrl;
+    if (s.length < 450000 && !/^data:image\/(png|webp)/i.test(s)) {
+      return imageUrl;
+    }
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const w0 = img.naturalWidth || img.width;
+          const h0 = img.naturalHeight || img.height;
+          if (!w0 || !h0) return resolve(imageUrl);
+          const scale = Math.min(1, maxEdge / Math.max(w0, h0));
+          const tw = Math.max(1, Math.round(w0 * scale));
+          const th = Math.max(1, Math.round(h0 * scale));
+          if (scale >= 1 && s.length < 700000) return resolve(imageUrl);
+          const canvas = document.createElement('canvas');
+          canvas.width = tw;
+          canvas.height = th;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return resolve(imageUrl);
+          ctx.drawImage(img, 0, 0, tw, th);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        } catch {
+          resolve(imageUrl);
+        }
+      };
+      img.onerror = () => resolve(imageUrl);
+      img.src = s;
     });
   },
 
@@ -875,38 +923,52 @@ const Register = {
     const useGroupRegister = overrides.forceNormal === true
       ? false
       : (mustKeepGroup ? true : !!ctx.useGroupRegister);
-      const byOptRetry = Array.isArray(overrides.productAttributesByOption) && overrides.productAttributesByOption.length > 0
-        ? overrides.productAttributesByOption
-        : (Array.isArray(ctx.productAttributesByOption) && ctx.productAttributesByOption.length > 0
-          ? ctx.productAttributesByOption
-          : null);
 
-      const regPayload = {
-        name: overrides.name || ctx.name,
-        sellingPrice: Number(overrides.sellingPrice || ctx.sellingPrice || 0),
-        categoryId: String(overrides.categoryId || ctx.categoryId || ''),
-        detailHtml: overrides.detailHtml || ctx.detailHtml || '',
-        uploadedImages: Array.isArray(ctx.uploadedImages) ? ctx.uploadedImages : [],
-        options: Array.isArray(ctx.options) ? ctx.options : [],
-        stock: Number(ctx.stock || 999),
-        brand: ctx.brand || '',
-        oliveyoungCategory: ctx.oliveyoungCategory || '',
-        sellerTags: Array.isArray(ctx.sellerTags) ? ctx.sellerTags : [],
-        brandName: ctx.brandName || undefined,
-        manufacturerName: ctx.manufacturerName || undefined,
-        deliveryProfile: ctx.deliveryProfile || undefined,
-      };
+    const byOptRetry = Array.isArray(overrides.productAttributesByOption) && overrides.productAttributesByOption.length > 0
+      ? overrides.productAttributesByOption
+      : (Array.isArray(ctx.productAttributesByOption) && ctx.productAttributesByOption.length > 0
+        ? ctx.productAttributesByOption
+        : null);
 
-      if (byOptRetry && useGroupRegister) {
-        regPayload.productAttributesByOption = byOptRetry;
-      } else if (byOptRetry && !useGroupRegister) {
-        regPayload.productAttributes = Array.isArray(byOptRetry[0]) ? byOptRetry[0] : [];
+    let omitGroupAttrs = true;
+    if (useGroupRegister) {
+      if (Object.prototype.hasOwnProperty.call(overrides, 'omitGroupProductAttributes')) {
+        omitGroupAttrs = overrides.omitGroupProductAttributes === true;
       } else {
-        const pa = Array.isArray(overrides.productAttributes)
-          ? overrides.productAttributes
-          : (Array.isArray(ctx.productAttributes) ? ctx.productAttributes : undefined);
-        if (pa !== undefined) regPayload.productAttributes = pa;
+        omitGroupAttrs = ctx.retryOmitGroupAttrs !== false;
       }
+    }
+
+    const regPayload = {
+      name: overrides.name || ctx.name,
+      sellingPrice: Number(overrides.sellingPrice || ctx.sellingPrice || 0),
+      categoryId: String(overrides.categoryId || ctx.categoryId || ''),
+      detailHtml: overrides.detailHtml || ctx.detailHtml || '',
+      uploadedImages: Array.isArray(ctx.uploadedImages) ? ctx.uploadedImages : [],
+      options: Array.isArray(ctx.options) ? ctx.options : [],
+      stock: Number(ctx.stock || 999),
+      brand: ctx.brand || '',
+      oliveyoungCategory: ctx.oliveyoungCategory || '',
+      sellerTags: Array.isArray(ctx.sellerTags) ? ctx.sellerTags : [],
+      brandName: ctx.brandName || undefined,
+      manufacturerName: ctx.manufacturerName || undefined,
+      deliveryProfile: ctx.deliveryProfile || undefined,
+    };
+
+    if (useGroupRegister) {
+      regPayload.omitGroupProductAttributes = omitGroupAttrs;
+    }
+
+    if (!omitGroupAttrs && byOptRetry && useGroupRegister) {
+      regPayload.productAttributesByOption = byOptRetry;
+    } else if (byOptRetry && !useGroupRegister) {
+      regPayload.productAttributes = Array.isArray(byOptRetry[0]) ? byOptRetry[0] : [];
+    } else if (!useGroupRegister || !omitGroupAttrs) {
+      const pa = Array.isArray(overrides.productAttributes)
+        ? overrides.productAttributes
+        : (Array.isArray(ctx.productAttributes) ? ctx.productAttributes : undefined);
+      if (pa !== undefined) regPayload.productAttributes = pa;
+    }
 
     if (Array.isArray(ctx.optionThumbnailUploads) && ctx.optionThumbnailUploads.length > 0) {
       regPayload.optionThumbnailUploads = ctx.optionThumbnailUploads;
@@ -1002,7 +1064,7 @@ const Register = {
         Storage.removeFromQueue(goodsNo);
         this._clearRetryContext(goodsNo);
         this._addCloseButton(totalTime, registered.name, true, null, isGroup);
-        return;
+        return regData;
       }
 
       const errMsg = this._extractRegisterErrorMessage(regData.error ?? regData.message ?? regData);
@@ -1014,6 +1076,7 @@ const Register = {
         categoryId: regPayload.categoryId,
         productAttributes: regPayload.productAttributes !== undefined ? regPayload.productAttributes : (ctx.productAttributes || []),
         productAttributesByOption: regPayload.productAttributesByOption || ctx.productAttributesByOption,
+        retryOmitGroupAttrs: regPayload.omitGroupProductAttributes === true,
         lastError: errMsg,
         invalidInputs,
         forceNormalRetry: mustKeepGroup ? false : !!ctx.forceNormalRetry,
@@ -1026,12 +1089,14 @@ const Register = {
         goodsNo,
         allowRetry: true,
       });
+      return regData;
     } catch (e) {
       this.stopTimer();
       const totalTime = ((Date.now() - this._startTime) / 1000).toFixed(1);
       this._saveRetryContext(goodsNo, {
         ...ctx,
         lastError: e.message,
+        retryOmitGroupAttrs: ctx.retryOmitGroupAttrs !== false,
         forceNormalRetry: mustKeepGroup ? false : false,
         mustKeepGroup,
       });
@@ -1040,6 +1105,7 @@ const Register = {
         goodsNo,
         allowRetry: true,
       });
+      return { success: false, error: e.message };
     }
   },
 
@@ -1050,7 +1116,7 @@ const Register = {
       return;
     }
 
-    const hasStoredByOption = Array.isArray(ctx.productAttributesByOption) && ctx.productAttributesByOption.length > 0;
+      const hasStoredByOption = Array.isArray(ctx.productAttributesByOption) && ctx.productAttributesByOption.length > 0;
     this._retryEditorPerOptionAttrs = hasStoredByOption
       ? ctx.productAttributesByOption.map((row) => (Array.isArray(row) ? row.map((a) => ({ ...a })) : []))
       : null;
@@ -1119,8 +1185,12 @@ const Register = {
         <div id="retry-attr-preview"></div>
       </div>
 
+      <label style="display:flex;align-items:flex-start;gap:8px;margin:12px 0 8px;font-size:12px;color:#334155;cursor:pointer;line-height:1.45;">
+        <input id="retry-omit-group-attrs" type="checkbox" ${ctx.retryOmitGroupAttrs !== false ? 'checked' : ''} style="margin-top:2px;" />
+        <span><strong>그룹 등록 시 상품속성 API 생략</strong> (기본 체크 — 연관 속성 오류 완화. 검색·기타 속성은 스마트스토어센터에서 입력)</span>
+      </label>
       <label style="display:flex;align-items:center;gap:8px;margin:12px 0 16px;font-size:12px;color:#334155;cursor:pointer;">
-        <input id="retry-force-normal" type="checkbox" ${forceNormalChecked} />
+        <input id="retry-force-normal" type="checkbox" ${forceNormalChecked} ${mustKeepGroup ? 'disabled' : ''} />
         일반상품 API로 재시도 (체크 시 그룹 대신 옵션형 단일 상품 등록)
       </label>
 
@@ -1136,6 +1206,7 @@ const Register = {
     const attrsEl = document.getElementById('retry-attributes-json');
     const categoryEl = document.getElementById('retry-category-id');
     const forceNormalEl = document.getElementById('retry-force-normal');
+    const omitGroupAttrsEl = document.getElementById('retry-omit-group-attrs');
 
     if (sanitizeBtn && detailEl) {
       sanitizeBtn.onclick = () => {
@@ -1152,10 +1223,13 @@ const Register = {
           forceNormal: !!forceNormalEl?.checked,
         };
 
+        const omitAttrs = !!omitGroupAttrsEl?.checked;
+
         if (this._retryEditorPerOptionAttrs && this._retryEditorPerOptionAttrs.length > 0) {
           await this._submitRetryPayload(goodsNo, {
             ...base,
-            productAttributesByOption: this._retryEditorPerOptionAttrs.map((row) =>
+            omitGroupProductAttributes: omitAttrs,
+            productAttributesByOption: omitAttrs ? undefined : this._retryEditorPerOptionAttrs.map((row) =>
               (Array.isArray(row) ? row.map((a) => ({ ...a })) : [])
             ),
           });
@@ -1173,7 +1247,8 @@ const Register = {
 
         await this._submitRetryPayload(goodsNo, {
           ...base,
-          productAttributes: parsedAttributes,
+          omitGroupProductAttributes: omitAttrs,
+          productAttributes: omitAttrs ? [] : parsedAttributes,
         });
       };
     }
@@ -1385,9 +1460,13 @@ const Register = {
       const optionThumbnailList = opts.length > 1
         ? opts.map((o) => this._toHighResImage((o?.image) || product.thumbnail)).filter(Boolean)
         : [];
+      const studioRefList = opts.length > 1
+        ? opts.map((o) => this._toStudioRefImage((o?.image) || product.thumbnail)).filter(Boolean)
+        : [];
       const totalThumbnails = isOptionProduct ? optionThumbnailList.length : 1;
       const genCount = isOptionProduct ? (totalThumbnails + sharedImageCount) : imgCount;
       const primaryThumbnail = optionThumbnailList[0] || this._toHighResImage((opts[0]?.image) || product.thumbnail || '');
+      const studioPrimaryRef = studioRefList[0] || this._toStudioRefImage((opts[0]?.image) || product.thumbnail || '');
 
       const tokenP = API.obtainNaverToken(15);
 
@@ -1400,8 +1479,8 @@ const Register = {
           count: genCount,
           prompt: customPrompt || undefined,
           thumbnailPrompt,
-          thumbnail: primaryThumbnail || undefined,
-          thumbnailList: optionThumbnailList.length > 0 ? optionThumbnailList : undefined,
+          thumbnail: studioPrimaryRef || undefined,
+          thumbnailList: studioRefList.length > 0 ? studioRefList : undefined,
           thumbnailCount: totalThumbnails,
           thumbnailOptions: opts.length > 1
             ? opts.slice(0, totalThumbnails).map((o) => (o.name || o.optionName || '').trim()).filter(Boolean)
@@ -1443,15 +1522,64 @@ const Register = {
       }
 
       let imageUrls = [];
-      if (imgResult.status === 'fulfilled' && imgResult.value?.success && imgResult.value?.images?.length > 0) {
-        imageUrls = imgResult.value.images;
-      } else {
-        console.warn('[등록] AI 이미지 실패, 올리브영 이미지 대체');
+      let fallbackImagesCache = null;
+      const fetchFallbackImages = async () => {
+        if (fallbackImagesCache) return fallbackImagesCache;
         try {
           const fb = await API.getProductImages(goodsNo, product.thumbnail);
-          imageUrls = (fb.success && fb.images) ? fb.images : [];
-        } catch { /* ignore */ }
+          fallbackImagesCache = (fb.success && Array.isArray(fb.images)) ? fb.images : [];
+        } catch {
+          fallbackImagesCache = [];
+        }
+        return fallbackImagesCache;
+      };
+      if (imgResult.status === 'fulfilled' && imgResult.value?.success && imgResult.value?.images?.length > 0) {
+        imageUrls = imgResult.value.images;
+        if (imgResult.value.truncated) {
+          const c = imgResult.value.concurrency != null ? ` (병렬 ${imgResult.value.concurrency})` : '';
+          console.warn(
+            '[등록] AI 이미지 일부만 생성됨 (Vercel 시간 한도)' + c + '. 요청',
+            imgResult.value.requestedJobs,
+            '건 →',
+            imgResult.value.ranJobs,
+            '건. 그룹 옵션 썸네일은 부족 시 첫 장을 공유합니다.'
+          );
+        }
+      } else {
+        const imgErr = imgResult.status === 'fulfilled'
+          ? (imgResult.value?.error || imgResult.value?.errors?.join?.('; ') || JSON.stringify(imgResult.value || {}).slice(0, 200))
+          : String(imgResult.reason?.message || imgResult.reason || 'rejected');
+        console.warn('[등록] AI 이미지 실패, 올리브영 이미지 대체 —', imgErr);
+        imageUrls = await fetchFallbackImages();
         if (imageUrls.length === 0 && product.thumbnail) imageUrls.push(product.thumbnail);
+      }
+      const desiredImageCount = Math.max(1, genCount);
+      if (imageUrls.length < desiredImageCount) {
+        const merged = [];
+        const seen = new Set();
+        const pushUnique = (url) => {
+          const s = String(url || '').trim();
+          if (!s || seen.has(s)) return;
+          seen.add(s);
+          merged.push(s);
+        };
+
+        imageUrls.forEach(pushUnique);
+        optionThumbnailList.forEach(pushUnique);
+        if (product.thumbnail) {
+          pushUnique(this._toHighResImage(product.thumbnail));
+          pushUnique(product.thumbnail);
+        }
+        (await fetchFallbackImages()).forEach(pushUnique);
+
+        const targetCount = Math.max(desiredImageCount, imageUrls.length);
+        imageUrls = merged.slice(0, targetCount);
+
+        if (imageUrls.length < desiredImageCount) {
+          console.warn('[등록] 이미지가 설정값보다 적습니다. 요청', desiredImageCount, '장 / 확보', imageUrls.length, '장');
+        } else {
+          console.warn('[등록] AI 반환 수가 부족해 올리브영 이미지로 보완했습니다. 요청', desiredImageCount, '장 / 최종', imageUrls.length, '장');
+        }
       }
       if (imageUrls.length === 0) {
         UI.updateProgressStep(0, 'error', '이미지 없음 — EccoAPI 키를 확인하세요');
@@ -1464,6 +1592,10 @@ const Register = {
         for (let i = 0; i < cropCount; i++) {
           imageUrls[i] = await this._cropImageBorder(imageUrls[i], settings.thumbCropPercent || 6);
         }
+      }
+
+      for (let i = 0; i < imageUrls.length; i++) {
+        imageUrls[i] = await this._shrinkDataUrlForUpload(imageUrls[i]);
       }
 
       let descHtml = '';
@@ -1609,7 +1741,7 @@ const Register = {
         }
       }
 
-      const useGroupRegister = registrationOptions.length >= 2;
+      const useGroupRegister = registrationOptions.length >= 1;
       UI.updateProgressStep(2, 'active',
         useGroupRegister
           ? `③ 그룹상품 등록 중... (옵션 ${registrationOptions.length}개 → 개별 페이지)`
@@ -1631,22 +1763,11 @@ const Register = {
         deliveryProfile,
       };
 
-      if (useGroupRegister && registrationOptions.length >= 2 && productAttributes.length > 0) {
-        const perOptAttrs = registrationOptions.map((opt) =>
-          this.buildProductAttributesFromAttrData(attrData, {
-            optionHint: (opt.name || opt.optionName || '').trim(),
-          })
-        );
-        const ser = (a) => JSON.stringify(a);
-        const allSame = perOptAttrs.every((p) => ser(p) === ser(perOptAttrs[0]));
-        if (!allSame) {
-          regPayload.productAttributesByOption = perOptAttrs;
-          console.log('[등록] 그룹상품 — 옵션별 속성 상이 → productAttributesByOption', perOptAttrs.length, '개 전송');
-        } else {
-          regPayload.productAttributes = productAttributes;
-        }
-      } else if (productAttributes.length > 0) {
+      if (!useGroupRegister && productAttributes.length > 0) {
         regPayload.productAttributes = productAttributes;
+      }
+      if (useGroupRegister) {
+        regPayload.omitGroupProductAttributes = true;
       }
 
       if (useGroupRegister && registrationOptions.length > 0 && thumbUploads.length > 0) {
@@ -1673,8 +1794,8 @@ const Register = {
             error: regData.error,
             invalidInputs: this._extractInvalidInputs(regData),
           };
-          console.warn('[등록] 그룹등록 실패 → 자동 일반등록 안 함 (수동 선택):', reason);
-          UI.updateProgressStep(2, 'error', '③ 그룹등록 실패 — 「수동 수정 후 재시도」에서 속성/카테고리를 고치거나「일반상품 API」를 선택하세요');
+          console.warn('[등록] 그룹등록 실패 (일반상품으로 자동 전환하지 않음):', reason);
+          UI.updateProgressStep(2, 'error', '③ 그룹등록 실패 — 카테고리·판매옵션 가이드를 조정하거나「수동 수정 후 재시도」를 사용하세요');
         }
       } else {
         regData = await API.registerProduct(regPayload);
@@ -1774,6 +1895,7 @@ const Register = {
           lastError: errMsg,
           invalidInputs,
           groupFailureInfo,
+          retryOmitGroupAttrs: true,
         });
         const failStep = groupFailureInfo
           ? `③ 그룹등록 실패 (${totalTime}초): ${this._clipErr(errMsg, 90)} — 「수동 수정 후 재시도」버튼을 눌러 주세요`

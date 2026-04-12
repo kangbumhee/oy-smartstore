@@ -111,7 +111,23 @@ const API = {
   async getNaverDeliverySettings() { return this.get('/api/naver/delivery-settings', true); },
   async registerProduct(data) { return this.post('/api/naver/register', data, true); },
   async registerGroupProduct(data) { return this.post('/api/naver/register-group', data, true); },
-  async uploadImages(imageUrls) { return this.post('/api/naver/upload-image', { imageUrls }, true); },
+  /** 한 요청에 여러 base64를 넣으면 Vercel 본문 한도(약 4.5MB)로 413 발생 → 1장씩 순차 업로드 */
+  async uploadImages(imageUrls) {
+    const list = Array.isArray(imageUrls) ? imageUrls.slice(0, 20) : [];
+    const uploaded = [];
+    const errors = [];
+    for (const url of list) {
+      const data = await this.post('/api/naver/upload-image', { imageUrls: [url] }, true);
+      if (data.uploaded?.length) uploaded.push(...data.uploaded);
+      if (data.errors?.length) errors.push(...data.errors);
+    }
+    return {
+      success: uploaded.length > 0,
+      uploaded,
+      errors,
+      total: list.length,
+    };
+  },
   /** R2 등 CORS 없는 URL → 서버 경유 data URL (캔버스 크롭용) */
   async fetchImageForCanvas(imageUrl) {
     return this.post('/api/image/fetch-for-canvas', { url: imageUrl }, false);
@@ -142,15 +158,41 @@ const API = {
   async deleteNaverProduct(productNo) { return this.delete(`/api/naver/products?productNo=${encodeURIComponent(productNo)}`, true); },
 
   // Image - AI product image generation (나노바나나/Gemini)
+  /**
+   * AI 상품 이미지 — EccoAPI는 호출당 과금됨.
+   * Vercel이 응답 전 연결을 끊으면(ERR_CONNECTION_CLOSED) 재시도 시 매번 다시 과금되므로 재시도하지 않는다.
+   */
   async generateProductImages(productInfo) {
     const h = this._credHeaders();
     h['Content-Type'] = 'application/json';
-    const r = await fetch('/api/image/studio', {
-      method: 'POST',
-      headers: h,
-      body: JSON.stringify(productInfo),
-    });
-    return r.json();
+    const body = JSON.stringify(productInfo);
+    const timeoutMs = 130000;
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      const r = await fetch('/api/image/studio', {
+        method: 'POST',
+        headers: h,
+        body,
+        signal: ac.signal,
+      });
+      clearTimeout(timer);
+      const text = await r.text();
+      try {
+        return JSON.parse(text);
+      } catch {
+        return { success: false, error: text || `HTTP ${r.status}`, status: r.status };
+      }
+    } catch (e) {
+      clearTimeout(timer);
+      const msg = String(e?.message || e);
+      console.warn('[API] image/studio 실패 (재시도 없음 — 중복 과금 방지):', msg);
+      return {
+        success: false,
+        error: msg.includes('aborted') ? '이미지 생성 시간 초과(Vercel 한도). 설정에서 이미지 장수를 줄이거나 올리브영 이미지를 사용하세요.' : msg,
+        noRetry: true,
+      };
+    }
   },
 
   // Tags
