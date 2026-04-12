@@ -129,6 +129,7 @@ module.exports = async function handler(req, res) {
       `[studio] Generating ${promptJobs.length} images, sharedRef=${sharedReferenceImages ? sharedReferenceImages.length : 0}, variantRefs=${thumbnailList.length}, prompt length: ${promptJobs[0]?.prompt?.length || 0}`
     );
 
+    const concurrency = promptJobs.length;
     const results = await Promise.allSettled(
       promptJobs.map((job) => callEccoAPI(eccoKey, job.prompt, job.referenceImages))
     );
@@ -141,6 +142,7 @@ module.exports = async function handler(req, res) {
     }
 
     const elapsed = Date.now() - startTime;
+    const abortLikeErrors = errors.filter((msg) => isAbortLikeMessage(msg));
     console.log(`[studio] Done: ${images.length} images, ${errors.length} errors, ${elapsed}ms`);
 
     if (images.length === 0) {
@@ -148,11 +150,26 @@ module.exports = async function handler(req, res) {
         success: false,
         error: '이미지 생성 실패: ' + (errors[0] || 'unknown'),
         errors,
+        requestedJobs: promptJobs.length,
+        ranJobs: results.length,
+        truncated: true,
+        concurrency,
+        noRetry: abortLikeErrors.length > 0,
         elapsed,
       });
     }
 
-    return res.status(200).json({ success: true, images, count: images.length, errors, elapsed });
+    return res.status(200).json({
+      success: true,
+      images,
+      count: images.length,
+      requestedJobs: promptJobs.length,
+      ranJobs: results.length,
+      truncated: images.length < promptJobs.length,
+      concurrency,
+      errors,
+      elapsed,
+    });
   } catch (e) {
     console.error('[studio] Error:', e.message);
     return res.status(200).json({ success: false, error: e.message, elapsed: Date.now() - startTime });
@@ -211,7 +228,7 @@ function buildPrompt(name, brand, category, optionName, hasReferenceImage) {
 
 async function callEccoAPI(apiKey, prompt, referenceImages) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 90000);
+  const timeout = setTimeout(() => controller.abort(), 120000);
 
   const payload = { prompt, imageSize: '1K', aspectRatio: '1:1' };
   if (referenceImages && referenceImages.length > 0) {
@@ -246,6 +263,11 @@ async function callEccoAPI(apiKey, prompt, referenceImages) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function isAbortLikeMessage(message) {
+  const msg = String(message || '').toLowerCase();
+  return msg.includes('aborted') || msg.includes('timeout') || msg.includes('time out');
 }
 
 function looksLikeAssetUrl(value) {

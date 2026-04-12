@@ -129,6 +129,89 @@ function trimGroupProductName(rawName, maxLength = 40) {
   return cleaned.substring(0, maxLength).trim();
 }
 
+function extractCountLikeNumber(value) {
+  const s = String(value || '').trim();
+  if (!s) return null;
+  const match = s.match(/(\d+(?:\.\d+)?)\s*(개|입|종|매|캡슐|정|포|ea|EA|병|박스|세트|일분|일치분)?/);
+  if (!match) return null;
+  const num = parseFloat(match[1]);
+  return Number.isFinite(num) ? num : null;
+}
+
+function findOptionValueNameById(standardPurchaseOptions, optionId) {
+  const row = Array.isArray(standardPurchaseOptions)
+    ? standardPurchaseOptions.find((item) => Number(item?.optionId) === Number(optionId))
+    : null;
+  return String(row?.valueName || '').trim();
+}
+
+function validateSuspiciousQuantityPricing(stdOptions, specificProducts, rawOptionLabels) {
+  const axes = Array.isArray(stdOptions)
+    ? stdOptions.filter((spo) => /수량/.test(String(spo?.optionName || '')))
+    : [];
+  if (axes.length === 0 || !Array.isArray(specificProducts) || specificProducts.length < 2) {
+    return null;
+  }
+
+  for (const axis of axes) {
+    const rows = specificProducts.map((product, idx) => {
+      const axisValue = findOptionValueNameById(product?.standardPurchaseOptions, axis.optionId);
+      return {
+        idx,
+        axisName: String(axis.optionName || '').trim(),
+        axisValue,
+        axisCount: extractCountLikeNumber(axisValue),
+        rawLabel: String(rawOptionLabels?.[idx] || '').trim(),
+        rawCount: extractCountLikeNumber(rawOptionLabels?.[idx]),
+        salePrice: parseInt(product?.salePrice || 0, 10) || 0,
+      };
+    });
+
+    const parseableAxis = rows.filter((row) => Number.isFinite(row.axisCount));
+    if (parseableAxis.length < 2) continue;
+
+    const axisCounts = [...new Set(parseableAxis.map((row) => row.axisCount))];
+    if (axisCounts.length < 2) continue;
+
+    const rawCounts = rows.filter((row) => Number.isFinite(row.rawCount)).map((row) => row.rawCount);
+    const rawUniqueCounts = [...new Set(rawCounts)];
+    const salePrices = rows.map((row) => row.salePrice).filter((price) => price > 0);
+    if (salePrices.length < 2) continue;
+
+    const minCount = Math.min(...axisCounts);
+    const maxCount = Math.max(...axisCounts);
+    const minPrice = Math.min(...salePrices);
+    const maxPrice = Math.max(...salePrices);
+    if (!(minCount > 0 && minPrice > 0)) continue;
+
+    const qtyRatio = maxCount / minCount;
+    const priceRatio = maxPrice / minPrice;
+    const fabricatedQuantityAxis = rawUniqueCounts.length <= 1 && axisCounts.length > 1;
+    const suspiciousPriceRatio =
+      (qtyRatio >= 5 && priceRatio <= 1.5) ||
+      (qtyRatio >= 3 && priceRatio <= 1.35);
+
+    if (!fabricatedQuantityAxis && !suspiciousPriceRatio) continue;
+
+    return {
+      axisName: String(axis.optionName || '').trim(),
+      qtyRatio,
+      priceRatio,
+      fabricatedQuantityAxis,
+      rows: rows.map((row) => ({
+        optionLabel: row.rawLabel,
+        mappedValue: row.axisValue,
+        salePrice: row.salePrice,
+      })),
+      message: fabricatedQuantityAxis
+        ? `선택한 카테고리의 판매옵션 축이 "${String(axis.optionName || '').trim()}"으로 강제로 분리되었지만, 실제 옵션명은 같은 수량대로 보입니다. 카테고리를 다시 선택해 주세요.`
+        : `선택한 카테고리의 판매옵션 축이 "${String(axis.optionName || '').trim()}"으로 해석되었지만 가격 차이가 수량 차이와 맞지 않습니다. 카테고리를 다시 선택해 주세요.`,
+    };
+  }
+
+  return null;
+}
+
 /**
  * GET /v2/standard-purchase-option-guides?categoryId=...
  * 공식 응답:
@@ -325,7 +408,8 @@ module.exports = async function handler(req, res) {
     const pickedGuide = chooseBestGuide(
       categoryId,
       guide.allGuides || [],
-      allOpts.map((opt) => (opt?.name || opt?.optionName || '').trim()).filter(Boolean)
+      allOpts.map((opt) => (opt?.name || opt?.optionName || '').trim()).filter(Boolean),
+      cleanedName
     );
     const selectedGuide = pickedGuide?.guide || { guideId: guide.guideId, standardPurchaseOptions: guide.standardPurchaseOptions };
     const guideId = selectedGuide.guideId ?? selectedGuide.id ?? guide.guideId;
@@ -442,7 +526,7 @@ module.exports = async function handler(req, res) {
         images: imagesPayload,
         deliveryInfo: { ...deliveryInfo },
         originAreaInfo: ORIGIN_AREA_INFO,
-        standardPurchaseOptions: buildStandardPurchaseOptionsForLabel(optName, stdOptions),
+        standardPurchaseOptions: buildStandardPurchaseOptionsForLabel(optName, stdOptions, { productTitle: cleanedName }),
         smartstoreChannelProduct: {
           naverShoppingRegistration: true,
           channelProductDisplayStatusType: 'ON',
@@ -450,6 +534,35 @@ module.exports = async function handler(req, res) {
         ...(paRows !== null ? { productAttributes: paRows } : {}),
       };
     });
+
+    const suspiciousQuantityPricing = validateSuspiciousQuantityPricing(
+      stdOptions,
+      specificProducts,
+      allOpts.map((opt) => (opt?.name || opt?.optionName || '').trim())
+    );
+    if (suspiciousQuantityPricing) {
+      console.warn('[group-register] suspicious quantity axis:', JSON.stringify(suspiciousQuantityPricing));
+      return res.status(200).json({
+        success: false,
+        fallbackToNormal: false,
+        error: suspiciousQuantityPricing.message,
+        invalidInputs: [{
+          name: 'groupProduct.standardPurchaseOptions',
+          type: 'Suspicious.quantityAxis',
+          message: suspiciousQuantityPricing.message,
+        }],
+        debug: {
+          guideId,
+          stdOptionIds: stdOptions.map((o) => ({ id: o.optionId, name: o.optionName })),
+          suspiciousQuantityPricing,
+          optionPrices: specificProducts.map((p, idx) => ({
+            idx,
+            salePrice: p.salePrice,
+            standardPurchaseOptions: p.standardPurchaseOptions,
+          })),
+        },
+      });
+    }
 
     const seoInfo = {};
     if (sellerTags && sellerTags.length > 0) {

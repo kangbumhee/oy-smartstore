@@ -108,6 +108,19 @@ const Register = {
     }
   },
 
+  _isAbortLikeImageFailure(rawError) {
+    const msg = String(rawError || '').toLowerCase();
+    return (
+      msg.includes('this operation was aborted') ||
+      msg.includes('operation was aborted') ||
+      msg.includes('aborted') ||
+      msg.includes('시간 초과') ||
+      msg.includes('timeout') ||
+      msg.includes('err_connection_closed') ||
+      msg.includes('networkerror')
+    );
+  },
+
   async _ensureFreshOptionData(goodsNo, opts = [], product = {}) {
     const list = Array.isArray(opts) ? opts.map((o) => ({ ...o })) : [];
     if (list.length === 0) return list;
@@ -1643,13 +1656,18 @@ const Register = {
       };
       if (imgResult.status === 'fulfilled' && imgResult.value?.success && imgResult.value?.images?.length > 0) {
         imageUrls = imgResult.value.images;
+        const imgErrors = Array.isArray(imgResult.value.errors) ? imgResult.value.errors : [];
+        const hasAbortLikeError = imgErrors.some((err) => this._isAbortLikeImageFailure(err));
         this._logProgress('[등록] AI 이미지 응답', {
           requestedJobs: imgResult.value.requestedJobs ?? genCount,
           ranJobs: imgResult.value.ranJobs ?? imgResult.value.images.length,
           returnedImages: imgResult.value.images.length,
           truncated: !!imgResult.value.truncated,
-          errors: Array.isArray(imgResult.value.errors) ? imgResult.value.errors.length : 0,
+          errors: imgErrors.length,
         }, imgResult.value.images.length < genCount ? 'warn' : 'success');
+        if (imgErrors.length > 0) {
+          this._logProgress('[등록] AI 이미지 세부 오류', imgErrors, hasAbortLikeError ? 'warn' : 'info');
+        }
         if (imgResult.value.truncated) {
           const c = imgResult.value.concurrency != null ? ` (병렬 ${imgResult.value.concurrency})` : '';
           console.warn(
@@ -1660,12 +1678,25 @@ const Register = {
             '건. 그룹 옵션 썸네일은 부족 시 첫 장을 공유합니다.'
           );
         }
+        if (hasAbortLikeError && imageUrls.length < genCount) {
+          throw new Error(
+            `AI 이미지 요청은 ${imgResult.value.requestedJobs ?? genCount}건 실행됐지만, 응답이 중간에 끊겨 ${imageUrls.length}장만 회수했습니다. ` +
+            '올리브영 이미지로 자동 대체하지 않았습니다. 이미지 장수를 줄이거나 다시 시도해 주세요.'
+          );
+        }
       } else {
         const imgErr = imgResult.status === 'fulfilled'
           ? (imgResult.value?.error || imgResult.value?.errors?.join?.('; ') || JSON.stringify(imgResult.value || {}).slice(0, 200))
           : String(imgResult.reason?.message || imgResult.reason || 'rejected');
+        const abortLike = this._isAbortLikeImageFailure(imgErr) || Boolean(imgResult.value?.noRetry);
+        this._logProgress('[등록] AI 이미지 실패', imgErr, abortLike ? 'error' : 'warn');
+        if (abortLike) {
+          throw new Error(
+            'AI 이미지 생성 요청이 중간에 끊겨 결과를 회수하지 못했습니다. ' +
+            '이번 시도는 올리브영 이미지로 자동 대체하지 않았습니다. 다시 시도하거나 이미지 장수를 줄여 주세요.'
+          );
+        }
         console.warn('[등록] AI 이미지 실패, 올리브영 이미지 대체 —', imgErr);
-        this._logProgress('[등록] AI 이미지 실패', imgErr, 'warn');
         imageUrls = await fetchFallbackImages();
         if (imageUrls.length === 0 && product.thumbnail) imageUrls.push(product.thumbnail);
       }
