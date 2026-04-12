@@ -93,6 +93,98 @@ const Register = {
     if (this._timer) { clearInterval(this._timer); this._timer = null; }
   },
 
+  _logProgress(message, detail = null, type = 'info') {
+    const suffix = detail == null
+      ? ''
+      : (typeof detail === 'string'
+          ? ` ${detail}`
+          : ` ${JSON.stringify(detail)}`);
+    const line = `${String(message || '')}${suffix}`.trim();
+    if (type === 'error') console.error(line);
+    else if (type === 'warn') console.warn(line);
+    else console.log(line);
+    if (typeof UI !== 'undefined' && typeof UI.appendProgressLog === 'function') {
+      UI.appendProgressLog(line, type);
+    }
+  },
+
+  async _ensureFreshOptionData(goodsNo, opts = [], product = {}) {
+    const list = Array.isArray(opts) ? opts.map((o) => ({ ...o })) : [];
+    if (list.length === 0) return list;
+
+    const currentImages = list.map((o) => String(o?.image || '').trim()).filter(Boolean);
+    const currentPrices = list
+      .map((o) => parseInt(o?.price || o?.finalPrice || o?.salePrice || 0, 10))
+      .filter((v) => Number.isFinite(v) && v > 0);
+    const uniqueImages = new Set(currentImages);
+    const uniquePrices = new Set(currentPrices);
+    const allSamePrice = currentPrices.length > 1 && uniquePrices.size <= 1;
+    const needRefresh = list.length > 1 && (
+      uniqueImages.size < Math.min(2, list.length) ||
+      currentPrices.length === 0 ||
+      allSamePrice
+    );
+
+    if (!needRefresh) return list;
+
+    this._logProgress('[등록] 옵션 데이터 재조회 시작', {
+      optionCount: list.length,
+      uniqueImageCount: uniqueImages.size,
+      uniquePriceCount: uniquePrices.size,
+    });
+
+    try {
+      const latest = await API.getProductOptions(goodsNo);
+      const latestOpts = Array.isArray(latest?.options) ? latest.options : [];
+      if (latestOpts.length === 0) {
+        this._logProgress('[등록] 옵션 데이터 재조회 결과 없음', null, 'warn');
+        return list;
+      }
+
+      const byOptionNumber = new Map(
+        latestOpts
+          .filter((o) => String(o?.optionNumber || '').trim())
+          .map((o) => [String(o.optionNumber).trim(), o])
+      );
+      const byName = new Map(
+        latestOpts
+          .filter((o) => String(o?.name || o?.optionName || '').trim())
+          .map((o) => [String(o.name || o.optionName).trim(), o])
+      );
+
+      const merged = list.map((opt) => {
+        const currentName = String(opt?.name || opt?.optionName || '').trim();
+        const currentNo = String(opt?.optionNumber || '').trim();
+        const latestOpt = byOptionNumber.get(currentNo) || byName.get(currentName);
+        if (!latestOpt) return { ...opt };
+
+        const currentPrice = parseInt(opt?.price || opt?.finalPrice || opt?.salePrice || 0, 10);
+        const latestPrice = parseInt(latestOpt?.price || latestOpt?.finalPrice || latestOpt?.salePrice || 0, 10);
+
+        return {
+          ...opt,
+          optionNumber: opt.optionNumber || latestOpt.optionNumber || '',
+          image: opt.image || latestOpt.image || '',
+          salePrice: (currentPrice > 0 && !allSamePrice) ? (opt.salePrice || currentPrice) : (latestOpt.salePrice || latestPrice || opt.salePrice || 0),
+          finalPrice: (currentPrice > 0 && !allSamePrice) ? (opt.finalPrice || currentPrice) : (latestOpt.finalPrice || latestPrice || opt.finalPrice || 0),
+          price: (currentPrice > 0 && !allSamePrice) ? currentPrice : (latestPrice || currentPrice || 0),
+          quantity: Number.isFinite(parseInt(opt?.quantity, 10)) ? opt.quantity : latestOpt.quantity,
+          stockQuantity: Number.isFinite(parseInt(opt?.stockQuantity, 10)) ? opt.stockQuantity : latestOpt.stockQuantity,
+        };
+      });
+
+      this._logProgress('[등록] 옵션 데이터 재조회 완료', merged.map((o) => ({
+        name: (o.name || o.optionName || '').trim(),
+        price: parseInt(o.price || o.finalPrice || o.salePrice || 0, 10) || 0,
+        image: String(o.image || '').trim() ? 'Y' : 'N',
+      })));
+      return merged;
+    } catch (e) {
+      this._logProgress('[등록] 옵션 데이터 재조회 실패', e?.message || String(e), 'warn');
+      return list;
+    }
+  },
+
   _escHtml(s) {
     return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
   },
@@ -1392,6 +1484,7 @@ const Register = {
       }
       opts = await this.showStockPopup(opts, product);
     }
+    opts = await this._ensureFreshOptionData(goodsNo, opts, product);
     calc = Margin.calculate(Margin.resolveProductPrice(product, opts), marginRate);
 
     const optCount = opts.length;
@@ -1427,6 +1520,13 @@ const Register = {
     this.startTimer();
 
     try {
+      this._logProgress('[등록] 시작', {
+        goodsNo,
+        optionCount: opts.length,
+        selectedOnly: checkedOpts.length > 0,
+        imgSetting: settings.imgCount || 1,
+        marginRate,
+      });
       UI.updateProgressStep(0, 'active', skipCategoryApi ? '① 토큰·이미지·설명 동시 진행 중... (카테고리 수동)' : '① 토큰·이미지·설명·카테고리 동시 진행 중...');
 
       const tpl = settings.imgPromptTemplate || 'studio_white';
@@ -1467,6 +1567,14 @@ const Register = {
       const genCount = isOptionProduct ? (totalThumbnails + sharedImageCount) : imgCount;
       const primaryThumbnail = optionThumbnailList[0] || this._toHighResImage((opts[0]?.image) || product.thumbnail || '');
       const studioPrimaryRef = studioRefList[0] || this._toStudioRefImage((opts[0]?.image) || product.thumbnail || '');
+      this._logProgress('[등록] 이미지 생성 요청', {
+        imgCount,
+        optionCount: opts.length,
+        totalThumbnails,
+        sharedImageCount,
+        genCount,
+        optionImageCount: new Set(optionThumbnailList).size,
+      });
 
       const tokenP = API.obtainNaverToken(15);
 
@@ -1535,6 +1643,13 @@ const Register = {
       };
       if (imgResult.status === 'fulfilled' && imgResult.value?.success && imgResult.value?.images?.length > 0) {
         imageUrls = imgResult.value.images;
+        this._logProgress('[등록] AI 이미지 응답', {
+          requestedJobs: imgResult.value.requestedJobs ?? genCount,
+          ranJobs: imgResult.value.ranJobs ?? imgResult.value.images.length,
+          returnedImages: imgResult.value.images.length,
+          truncated: !!imgResult.value.truncated,
+          errors: Array.isArray(imgResult.value.errors) ? imgResult.value.errors.length : 0,
+        }, imgResult.value.images.length < genCount ? 'warn' : 'success');
         if (imgResult.value.truncated) {
           const c = imgResult.value.concurrency != null ? ` (병렬 ${imgResult.value.concurrency})` : '';
           console.warn(
@@ -1550,6 +1665,7 @@ const Register = {
           ? (imgResult.value?.error || imgResult.value?.errors?.join?.('; ') || JSON.stringify(imgResult.value || {}).slice(0, 200))
           : String(imgResult.reason?.message || imgResult.reason || 'rejected');
         console.warn('[등록] AI 이미지 실패, 올리브영 이미지 대체 —', imgErr);
+        this._logProgress('[등록] AI 이미지 실패', imgErr, 'warn');
         imageUrls = await fetchFallbackImages();
         if (imageUrls.length === 0 && product.thumbnail) imageUrls.push(product.thumbnail);
       }
@@ -1577,8 +1693,10 @@ const Register = {
 
         if (imageUrls.length < desiredImageCount) {
           console.warn('[등록] 이미지가 설정값보다 적습니다. 요청', desiredImageCount, '장 / 확보', imageUrls.length, '장');
+          this._logProgress('[등록] 이미지 부족', { requested: desiredImageCount, actual: imageUrls.length }, 'warn');
         } else {
           console.warn('[등록] AI 반환 수가 부족해 올리브영 이미지로 보완했습니다. 요청', desiredImageCount, '장 / 최종', imageUrls.length, '장');
+          this._logProgress('[등록] 이미지 보완 완료', { requested: desiredImageCount, actual: imageUrls.length }, 'warn');
         }
       }
       if (imageUrls.length === 0) {
@@ -1636,6 +1754,11 @@ const Register = {
         }),
       ]);
       const uploadedImages = (uploadData.uploaded?.length > 0) ? uploadData.uploaded : [];
+      this._logProgress('[등록] 이미지 업로드 결과', {
+        requested: imageUrls.length,
+        uploaded: uploadedImages.length,
+        uploadErrors: Array.isArray(uploadData.errors) ? uploadData.errors.length : 0,
+      }, uploadedImages.length < imageUrls.length ? 'warn' : 'success');
       if (uploadData.errors?.length > 0) console.warn('[등록] 업로드 에러:', uploadData.errors);
       const sellerTags = tagData.tags || [];
       if (sellerTags.length > 0) console.log('[등록] 태그', sellerTags.length, '개:', sellerTags.map(t => t.text).join(', '));
@@ -1742,6 +1865,12 @@ const Register = {
       }
 
       const useGroupRegister = registrationOptions.length >= 1;
+      this._logProgress('[등록] 판매 옵션 요약', registrationOptions.map((o) => ({
+        name: (o.name || o.optionName || '').trim(),
+        oyPrice: parseInt(o.price || o.finalPrice || o.salePrice || 0, 10) || 0,
+        sellingPrice: parseInt(o.sellingPrice || finalSellingPrice || 0, 10) || 0,
+        stock: parseInt(o.stockQuantity ?? o.quantity ?? 0, 10) || 0,
+      })));
       UI.updateProgressStep(2, 'active',
         useGroupRegister
           ? `③ 그룹상품 등록 중... (옵션 ${registrationOptions.length}개 → 개별 페이지)`
@@ -1806,6 +1935,9 @@ const Register = {
       const isGroup = regData.isGroup === true;
 
       if (regData.success) {
+        if (regData.debug) {
+          this._logProgress('[등록] 그룹 응답 디버그', regData.debug);
+        }
         const label = isGroup
           ? `③ 그룹등록 완료! (옵션별 개별 페이지 생성, ${totalTime}초)`
           : `③ 등록 완료! (총 ${totalTime}초)`;
@@ -1862,6 +1994,9 @@ const Register = {
         const errRaw = regData.error ?? regData.message ?? regData;
         const errMsg = this._extractRegisterErrorMessage(errRaw);
         const invalidInputs = this._mergeInvalidInputs(regData, groupFailureInfo);
+        if (regData.debug) {
+          this._logProgress('[등록] 그룹 실패 디버그', regData.debug, 'warn');
+        }
         console.error('[등록 실패 상세]', errRaw);
         if (invalidInputs.length > 0) {
           console.error('[invalidInputs]', JSON.stringify(invalidInputs, null, 2));

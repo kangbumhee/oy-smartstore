@@ -579,6 +579,15 @@ module.exports = async function handler(req, res) {
             requestId: final.requestId,
             productNos: final.productNos,
             state: 'COMPLETED',
+            debug: {
+              guideId,
+              stdOptionIds: stdOptions.map((o) => ({ id: o.optionId, name: o.optionName })),
+              optionPrices: specificProducts.map((p, idx) => ({
+                idx,
+                salePrice: p.salePrice,
+                standardPurchaseOptions: p.standardPurchaseOptions,
+              })),
+            },
           });
         }
         if (final && (final.state === 'ERROR' || final.state === 'FAILED')) {
@@ -620,6 +629,15 @@ module.exports = async function handler(req, res) {
           requestId: reqId,
           productNos: data.productNos || progress.productNos || [],
           state: 'COMPLETED',
+          debug: {
+            guideId,
+            stdOptionIds: stdOptions.map((o) => ({ id: o.optionId, name: o.optionName })),
+            optionPrices: specificProducts.map((p, idx) => ({
+              idx,
+              salePrice: p.salePrice,
+              standardPurchaseOptions: p.standardPurchaseOptions,
+            })),
+          },
         });
       }
 

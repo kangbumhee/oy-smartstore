@@ -152,7 +152,7 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    return res.status(200).json({ success: true, images, count: images.length, elapsed });
+    return res.status(200).json({ success: true, images, count: images.length, errors, elapsed });
   } catch (e) {
     console.error('[studio] Error:', e.message);
     return res.status(200).json({ success: false, error: e.message, elapsed: Date.now() - startTime });
@@ -240,8 +240,47 @@ async function callEccoAPI(apiKey, prompt, referenceImages) {
     for (const part of inlineParts) {
       if (part.inlineData?.assetUrl) return part.inlineData.assetUrl;
     }
+    const extracted = extractAssetUrl(data);
+    if (extracted) return extracted;
     throw new Error('EccoAPI: 응답에 이미지 URL 없음');
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function looksLikeAssetUrl(value) {
+  const s = String(value || '').trim();
+  if (!/^https?:\/\//i.test(s)) return false;
+  return /\.(png|jpg|jpeg|webp|gif)(\?|$)/i.test(s)
+    || s.includes('asset')
+    || s.includes('cloudflare')
+    || s.includes('storage')
+    || s.includes('/generate');
+}
+
+function extractAssetUrl(node, depth = 0, seen = new Set()) {
+  if (depth > 5 || node == null) return '';
+  if (typeof node === 'string') return looksLikeAssetUrl(node) ? node : '';
+  if (typeof node !== 'object') return '';
+  if (seen.has(node)) return '';
+  seen.add(node);
+
+  const preferredKeys = ['assetUrl', 'imageUrl', 'downloadUrl', 'outputUrl', 'url'];
+  for (const key of preferredKeys) {
+    if (looksLikeAssetUrl(node[key])) return String(node[key]).trim();
+  }
+
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const found = extractAssetUrl(item, depth + 1, seen);
+      if (found) return found;
+    }
+    return '';
+  }
+
+  for (const key of Object.keys(node)) {
+    const found = extractAssetUrl(node[key], depth + 1, seen);
+    if (found) return found;
+  }
+  return '';
 }

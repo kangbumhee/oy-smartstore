@@ -204,9 +204,39 @@ const UI = {
         <div class="step-icon ${s.status}">${s.status === 'done' ? '✓' : s.status === 'error' ? '✗' : s.status === 'active' ? '⏳' : (i + 1)}</div>
         <span>${s.label}</span>
       </div>
-    `).join('');
+    `).join('') + `
+      <div style="margin-top:14px;">
+        <div style="font-size:12px;font-weight:700;color:#475569;margin-bottom:6px;">진행 로그</div>
+        <div id="progress-log" style="max-height:150px;overflow:auto;padding:10px;border:1px solid #e2e8f0;border-radius:10px;background:#0f172a;color:#e2e8f0;font-size:11px;line-height:1.55;font-family:Consolas,Monaco,monospace;"></div>
+      </div>
+    `;
     document.getElementById('progress-steps').innerHTML = html;
     document.getElementById('progress-overlay').style.display = 'flex';
+  },
+
+  appendProgressLog(message, type = 'info') {
+    const el = document.getElementById('progress-log');
+    if (!el) return;
+    const color = type === 'error'
+      ? '#fca5a5'
+      : type === 'warn'
+        ? '#fde68a'
+        : type === 'success'
+          ? '#86efac'
+          : '#cbd5e1';
+    const ts = new Date();
+    const hh = String(ts.getHours()).padStart(2, '0');
+    const mm = String(ts.getMinutes()).padStart(2, '0');
+    const ss = String(ts.getSeconds()).padStart(2, '0');
+    const line = document.createElement('div');
+    line.style.color = color;
+    line.style.marginBottom = '4px';
+    line.textContent = `[${hh}:${mm}:${ss}] ${String(message || '')}`;
+    el.appendChild(line);
+    while (el.childElementCount > 80) {
+      el.removeChild(el.firstChild);
+    }
+    el.scrollTop = el.scrollHeight;
   },
 
   updateProgressStep(index, status, label) {
