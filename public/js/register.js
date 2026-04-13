@@ -1823,8 +1823,9 @@ const Register = {
         : '| 태그 없음';
 
       const naverImgUrls = uploadedImages.map((img) => img.url).filter(Boolean);
-      const thumbUploads = uploadedImages.slice(0, totalThumbnails);
-      const sharedUploads = uploadedImages.slice(totalThumbnails, totalThumbnails + sharedImageCount);
+      // studio.js now outputs: shared images first, then option-specific thumbnails
+      const sharedUploads = uploadedImages.slice(0, sharedImageCount);
+      const thumbUploads = uploadedImages.slice(sharedImageCount, sharedImageCount + totalThumbnails);
 
       let imgsForDetailTop = naverImgUrls;
       if (isOptionProduct) {

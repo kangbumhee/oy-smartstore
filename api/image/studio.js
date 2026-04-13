@@ -78,6 +78,15 @@ module.exports = async function handler(req, res) {
         Math.max(1, parseInt(rawThumbnailCount, 10) || 1),
         numTotal
       );
+      // Shared/main images first (→ optionalImages/추가이미지)
+      const numShared = numTotal - numThumbs;
+      for (let i = 0; i < numShared; i++) {
+        promptJobs.push({
+          prompt: mainPrompt,
+          referenceImages: sharedReferenceImages,
+        });
+      }
+      // Option-specific thumbnails last (→ representativeImage/대표이미지)
       for (let i = 0; i < numThumbs && promptJobs.length < numTotal; i++) {
         let p = baseThumb || mainPrompt;
         if (baseThumb && optNames[i]) {
@@ -90,17 +99,12 @@ module.exports = async function handler(req, res) {
           referenceImages: promptReferenceImages,
         });
       }
-      while (promptJobs.length < numTotal) {
-        promptJobs.push({
-          prompt: mainPrompt,
-          referenceImages: sharedReferenceImages,
-        });
-      }
     } else {
       const numMain = Math.min(numTotal, 5);
       const thumbPrompt = baseThumb;
+      // Main images first (→ representativeImage for single products)
       for (let i = 0; i < numMain; i++) {
-        if (i === 0 && thumbPrompt) {
+        if (i === numMain - 1 && thumbPrompt) {
           promptJobs.push({
             prompt: thumbPrompt,
             referenceImages: sharedReferenceImages,
@@ -205,24 +209,19 @@ function ensureProductContext(prompt, _name, _brand) {
 }
 
 function buildPrompt(name, brand, category, optionName, hasReferenceImage) {
-  const parts = [`Professional product advertisement photo featuring "${name}"`];
+  const parts = [`Professional e-commerce product photograph of "${name}"`];
   if (brand) parts.push(`by "${brand}"`);
-  if (optionName) parts.push(`(${optionName} variant)`);
   parts.push('.');
-  parts.push('A young attractive Korean model is holding or presenting the product.');
-  parts.push('Clean studio background, professional lighting, high-end commercial quality.');
-  parts.push('Product clearly visible and prominent. Photorealistic.');
+  parts.push('Clean white studio background, professional product photography with soft studio lighting.');
+  parts.push('Product centered, occupying 70% of frame. Slight soft shadow underneath.');
+  parts.push('High-end commercial quality.');
+  parts.push('NO text, NO watermarks, NO hands, NO people. Photorealistic.');
+  if (optionName) {
+    parts.push(`The specific variant shown is "${optionName}".`);
+  }
   if (hasReferenceImage) {
     parts.push('Match the EXACT product packaging design from the reference image — same colors, logos, patterns, and shape.');
   }
-
-  if (category) {
-    const cat = (category || '').toLowerCase();
-    if (cat.includes('화장품') || cat.includes('스킨') || cat.includes('메이크업') || cat.includes('뷰티')) {
-      parts.push('K-beauty cosmetics styling.');
-    }
-  }
-  parts.push('NO text overlays. NO watermarks.');
   return parts.join(' ').substring(0, 2000);
 }
 
