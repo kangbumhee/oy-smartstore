@@ -218,20 +218,8 @@ const API = {
       : 0;
     const sharedJobs = Math.max(0, totalCount - thumbnailJobs);
 
+    // Build jobs: shared images first, then thumbnails (matches studio.js output order)
     const jobs = [];
-    for (let i = 0; i < thumbnailJobs; i++) {
-      jobs.push({
-        kind: 'thumbnail',
-        payload: {
-          ...baseInfo,
-          count: 1,
-          thumbnail: thumbnailList[i] || thumbnail || '',
-          thumbnailList: undefined,
-          thumbnailCount: 1,
-          thumbnailOptions: thumbnailOptions[i] ? [thumbnailOptions[i]] : undefined,
-        },
-      });
-    }
     for (let i = 0; i < sharedJobs; i++) {
       jobs.push({
         kind: 'shared',
@@ -242,6 +230,19 @@ const API = {
           thumbnailList: undefined,
           thumbnailCount: undefined,
           thumbnailOptions: undefined,
+        },
+      });
+    }
+    for (let i = 0; i < thumbnailJobs; i++) {
+      jobs.push({
+        kind: 'thumbnail',
+        payload: {
+          ...baseInfo,
+          count: 1,
+          thumbnail: thumbnailList[i] || thumbnail || '',
+          thumbnailList: undefined,
+          thumbnailCount: 1,
+          thumbnailOptions: thumbnailOptions[i] ? [thumbnailOptions[i]] : undefined,
         },
       });
     }
@@ -260,55 +261,48 @@ const API = {
     const errors = [];
     let noRetry = false;
 
-    for (let i = 0; i < jobs.length; i++) {
+    if (typeof onProgress === 'function') {
+      onProgress({
+        phase: 'start',
+        index: 0,
+        total: jobs.length,
+        message: `이미지 ${jobs.length}장 병렬 생성 시작`,
+      });
+    }
+
+    // Parallel generation with Promise.allSettled
+    const results = await Promise.allSettled(
+      jobs.map((job) => this._generateProductImageSingle(job.payload, 55000))
+    );
+
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
       const job = jobs[i];
-      try {
+      const label = job.kind === 'thumbnail' ? '썸네일' : '공유';
+      if (r.status === 'fulfilled' && r.value?.success && Array.isArray(r.value.images) && r.value.images.length > 0) {
+        images.push(...r.value.images);
         if (typeof onProgress === 'function') {
           onProgress({
-            phase: 'start',
+            phase: 'done',
             index: i + 1,
             total: jobs.length,
             kind: job.kind,
-            message: `${job.kind === 'thumbnail' ? '썸네일' : '공유'} 이미지 ${i + 1}/${jobs.length} 생성 시작`,
+            message: `${label} 이미지 ${i + 1}/${jobs.length} 완료`,
           });
         }
-        const data = await this._generateProductImageSingle(job.payload, 55000);
-        if (data.success && Array.isArray(data.images) && data.images.length > 0) {
-          images.push(...data.images);
-          if (typeof onProgress === 'function') {
-            onProgress({
-              phase: 'done',
-              index: i + 1,
-              total: jobs.length,
-              kind: job.kind,
-              message: `${job.kind === 'thumbnail' ? '썸네일' : '공유'} 이미지 ${i + 1}/${jobs.length} 완료`,
-            });
-          }
-        } else {
-          const errMsg = data.error || '이미지 생성 실패';
-          errors.push(`job ${i + 1}: ${errMsg}`);
-          noRetry = noRetry || !!data.noRetry;
-          if (typeof onProgress === 'function') {
-            onProgress({
-              phase: 'error',
-              index: i + 1,
-              total: jobs.length,
-              kind: job.kind,
-              message: `${job.kind === 'thumbnail' ? '썸네일' : '공유'} 이미지 ${i + 1}/${jobs.length} 실패: ${errMsg}`,
-            });
-          }
-        }
-      } catch (e) {
-        const errMsg = String(e?.message || e);
+      } else {
+        const errMsg = r.status === 'fulfilled'
+          ? (r.value?.error || '이미지 생성 실패')
+          : String(r.reason?.message || r.reason || '이미지 생성 실패');
         errors.push(`job ${i + 1}: ${errMsg}`);
-        noRetry = true;
+        noRetry = noRetry || !!(r.status === 'fulfilled' && r.value?.noRetry);
         if (typeof onProgress === 'function') {
           onProgress({
             phase: 'error',
             index: i + 1,
             total: jobs.length,
             kind: job.kind,
-            message: `${job.kind === 'thumbnail' ? '썸네일' : '공유'} 이미지 ${i + 1}/${jobs.length} 실패: ${errMsg}`,
+            message: `${label} 이미지 ${i + 1}/${jobs.length} 실패: ${errMsg}`,
           });
         }
       }
